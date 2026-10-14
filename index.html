@@ -12,6 +12,36 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Runtime Environment: HMR disabled in AI Studio; ignore harmless Vite HMR websocket errors
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason;
+        var msg = reason && (reason.message || String(reason));
+        var stack = reason && (reason.stack || '');
+        if (
+          msg.includes('WebSocket') ||
+          msg.includes('vite') ||
+          stack.includes('@vite/client') ||
+          stack.includes('client.mjs')
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var msg = event.message || '';
+        var filename = event.filename || '';
+        if (
+          filename.includes('@vite/client') ||
+          filename.includes('client.mjs') ||
+          msg.includes('WebSocket') ||
+          msg.includes('vite')
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      });
+    </script>
   </head>
   <body class="bg-[#090d16] text-slate-100 antialiased selection:bg-rose-600 selection:text-white">
     <div id="root"></div>
