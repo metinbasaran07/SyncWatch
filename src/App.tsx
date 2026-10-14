@@ -374,11 +374,27 @@ export default function App() {
     webrtc.setUserId(userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
-    // Initialize socket connection immediately so user is in the room without media latency
+    // Acquire local camera and mic with a fast race to ensure tracks exist before initial offer
+    try {
+      const initialMediaPromise = webrtc.startLocalMedia(true, true);
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
+      const stream = await Promise.race([initialMediaPromise, timeoutPromise]);
+      if (stream) {
+        setLocalStream(stream);
+        const hasV = stream.getVideoTracks().length > 0;
+        const hasA = stream.getAudioTracks().length > 0;
+        setHasCamera(hasV);
+        setHasMic(hasA);
+      }
+    } catch (e) {
+      console.warn('Initial media race skipped or failed:', e);
+    }
+
+    // Initialize socket connection immediately
     socket.init(targetRoom, userId, name, randomColor, asHost);
     setIsJoined(true);
 
-    // Request camera and microphone in background (non-blocking)
+    // If stream wasn't ready during fast race, finish acquiring in background
     webrtc.startLocalMedia(true, true).then((stream) => {
       if (stream) {
         setLocalStream(stream);

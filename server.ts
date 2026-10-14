@@ -59,6 +59,7 @@ interface RoomUserRecord {
 
 interface RoomEvent {
   id: string;
+  seq: number;
   type: string;
   roomId: string;
   senderId?: string;
@@ -86,6 +87,7 @@ interface RoomData {
   };
   users: Map<string, RoomUserRecord>;
   events: RoomEvent[];
+  nextEventSeq: number;
   activeVote?: any;
 }
 
@@ -114,6 +116,7 @@ function getOrCreateRoom(roomId: string, hostName?: string, hostId?: string): Ro
       },
       users: new Map(),
       events: [],
+      nextEventSeq: 1,
     });
   }
   return rooms.get(normId)!;
@@ -163,9 +166,11 @@ function dispatchRoomEvent(
 ): RoomEvent {
   const normId = roomId.trim().toLowerCase();
   const room = getOrCreateRoom(normId);
+  const seq = room.nextEventSeq++;
 
   const roomEvent: RoomEvent = {
-    id: `ev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    id: `ev_${Date.now()}_${seq}_${Math.random().toString(36).substring(2, 6)}`,
+    seq,
     type: event.type,
     roomId: normId,
     senderId: event.senderId,
@@ -481,14 +486,33 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// List all active rooms with participants (for room discovery & quick join)
+app.get('/api/rooms', (req, res) => {
+  const activeRooms = Array.from(rooms.values())
+    .filter(r => r.users.size > 0)
+    .map(r => {
+      const hostUser = r.users.get(r.hostId);
+      return {
+        id: r.id,
+        name: r.name,
+        userCount: r.users.size,
+        hasPassword: Boolean(r.password),
+        hostName: hostUser?.name || 'Oda Sahibi',
+        currentVideo: r.video?.sourceTitle && r.video.sourceTitle !== 'İçerik Seçilmedi' ? r.video.sourceTitle : 'İçerik Bekleniyor',
+        users: Array.from(r.users.values()).map(u => ({ id: u.id, name: u.name, avatarColor: u.avatarColor })),
+      };
+    });
+  res.json({ success: true, rooms: activeRooms });
+});
+
 // Direct room state query
 app.get('/api/room/:roomId', (req, res) => {
   const normId = (req.params.roomId || '').trim().toLowerCase();
   const room = rooms.get(normId);
-  if (!room) {
-    return res.status(404).json({ error: 'Room not found' });
+  if (!room || room.users.size === 0) {
+    return res.status(200).json({ exists: false, error: 'Oda bulunamadı veya henüz aktif değil' });
   }
-  res.json({ success: true, room: getRoomSnapshot(room) });
+  res.json({ exists: true, success: true, room: getRoomSnapshot(room) });
 });
 
 // Unified HTTP Signaling & Polling endpoint (used across devices, proxies, Cloud Run and Vercel)
@@ -502,7 +526,7 @@ app.all('/api/signaling', (req, res) => {
   const isHost = query.isHost === true || query.isHost === 'true' || body.isHost === true;
   const action = (query.action || body.action || (body.type === 'join-room' ? 'join' : '')).toString();
   const message = body.message || (body.type && body.type !== 'join-room' ? body : undefined);
-  const fetchSince = query.fetchSince || query.lastIndex || body.fetchSince;
+  const fetchSince = query.fetchSince || query.lastIndex || query.since || body.fetchSince;
   const userState = body.userState;
 
   if (!roomId) {
@@ -551,15 +575,21 @@ app.all('/api/signaling', (req, res) => {
     });
   }
 
-  // Filter events for this user since the given timestamp
+  // Filter events for this user since the given sequence or timestamp
   const since = Number(fetchSince) || 0;
   const newEvents = room.events.filter(e => {
-    if (e.timestamp <= since) return false;
+    // If client supplied a sequence number (less than 1,000,000) or timestamp
+    if (since < 1000000) {
+      if (e.seq <= since) return false;
+    } else {
+      if (e.timestamp <= since) return false;
+    }
     if (e.targetId && e.targetId !== userId) return false;
     return true;
   });
 
   const snapshot = getRoomSnapshot(room);
+  const currentSeq = room.nextEventSeq - 1;
 
   res.json({
     success: true,
@@ -568,6 +598,7 @@ app.all('/api/signaling', (req, res) => {
     users: snapshot.users,
     messages: newEvents,
     events: newEvents,
+    lastSeq: currentSeq,
     now: Date.now(),
   });
 });

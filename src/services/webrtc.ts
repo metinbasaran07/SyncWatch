@@ -13,6 +13,9 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ],
 };
 
@@ -23,6 +26,7 @@ class WebRTCManager {
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private peers: Map<string, RTCPeerConnection> = new Map();
+  private pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
   private remoteStreams: Map<string, MediaStream> = new Map();
   private onRemoteStreamsChange: RemoteStreamsChangeCallback | null = null;
   private onSpeakingChanged: SpeakingCallback | null = null;
@@ -293,6 +297,19 @@ class WebRTCManager {
     return peer;
   }
 
+  private async drainCandidates(userId: string, peer: RTCPeerConnection) {
+    const queued = this.pendingCandidates.get(userId);
+    if (!queued || queued.length === 0) return;
+    this.pendingCandidates.delete(userId);
+    for (const cand of queued) {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(cand));
+      } catch (e) {
+        console.warn('Error adding drained candidate:', e);
+      }
+    }
+  }
+
   public async handleOffer(senderId: string, offer: RTCSessionDescriptionInit) {
     let peer = this.peers.get(senderId);
     if (!peer) {
@@ -301,6 +318,7 @@ class WebRTCManager {
 
     try {
       await peer.setRemoteDescription(new RTCSessionDescription(offer));
+      await this.drainCandidates(senderId, peer);
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       socket.sendSignal('answer', answer, senderId);
@@ -314,6 +332,7 @@ class WebRTCManager {
     if (peer) {
       try {
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
+        await this.drainCandidates(senderId, peer);
       } catch (err) {
         console.error('Error handling WebRTC answer:', err);
       }
@@ -322,16 +341,23 @@ class WebRTCManager {
 
   public async handleCandidate(senderId: string, candidate: RTCIceCandidateInit) {
     const peer = this.peers.get(senderId);
-    if (peer) {
+    if (peer && peer.remoteDescription && peer.remoteDescription.type) {
       try {
         await peer.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
         console.error('Error adding ICE candidate:', err);
       }
+    } else {
+      // Queue candidate until remote description is set
+      if (!this.pendingCandidates.has(senderId)) {
+        this.pendingCandidates.set(senderId, []);
+      }
+      this.pendingCandidates.get(senderId)!.push(candidate);
     }
   }
 
   public removePeer(userId: string) {
+    this.pendingCandidates.delete(userId);
     const peer = this.peers.get(userId);
     if (peer) {
       peer.close();

@@ -16,6 +16,7 @@ class SocketClient {
   private heartbeatTimer: any = null;
   private syncPollTimer: any = null;
   private lastPollTimestamp: number = 0;
+  private lastPollSeq: number = 0;
   private lastRoomState: any = null;
   private seenMessageIds: Set<string> = new Set();
 
@@ -25,6 +26,8 @@ class SocketClient {
     this.userName = userName;
     this.userColor = userColor;
     this.isHost = isHost;
+    this.lastPollSeq = 0;
+    this.lastPollTimestamp = 0;
 
     // Reset state & timers
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -175,7 +178,7 @@ class SocketClient {
         userColor: this.userColor,
         isHost: this.isHost,
         action,
-        fetchSince: this.lastPollTimestamp,
+        fetchSince: this.lastPollSeq || 0,
       };
 
       if (outgoingMessage) {
@@ -190,6 +193,9 @@ class SocketClient {
 
       if (res.ok) {
         const json = await res.json();
+        if (json.lastSeq !== undefined) {
+          this.lastPollSeq = json.lastSeq;
+        }
         this.lastPollTimestamp = json.now || Date.now();
 
         // 1. Process full room state (users, video, name)
@@ -281,8 +287,15 @@ class SocketClient {
     // 2. Send via WebSocket if connected
     const sentViaWs = this.sendWsPayload(enriched);
 
-    // 3. Send via HTTP signaling endpoint (immediate delivery if WS is disconnected, or for persistent state events)
-    const isCriticalState = ['sync:video', 'chat:message', 'room:password_update', 'vote:update', 'join-room'].includes(enriched.type);
+    // 3. Send via HTTP signaling endpoint (for persistent state events and WebRTC signals)
+    const isCriticalState = [
+      'sync:video',
+      'chat:message',
+      'room:password_update',
+      'vote:update',
+      'join-room',
+    ].includes(enriched.type) || enriched.type.startsWith('signal:');
+
     if (!sentViaWs || isCriticalState) {
       this.performHttpSync('poll', enriched);
     }
