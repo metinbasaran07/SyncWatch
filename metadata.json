@@ -1,0 +1,12 @@
+{
+  "name": "CineSync - Ortak Film İzleme & Video Senkronizasyonu",
+  "description": "Arkadaşlarınızla YouTube, Netflix ve film sitelerinden eşzamanlı video izleyin. WebRTC kamera, bas-konuş ses ve uçtan uca şifreli oda sistemi.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
