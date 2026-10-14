@@ -10,29 +10,49 @@ import { RoomState, RoomUser, VideoState, ChatMessage, EmojiReaction, MovieSugge
 import { socket } from './services/socket';
 import { webrtc } from './services/webrtc';
 import { deriveKeyFromPassword, encryptMessage, decryptMessage } from './services/crypto';
-import { Copy, ShieldCheck, Check, MonitorUp, Film } from 'lucide-react';
+import { MessageSquare, ShieldCheck } from 'lucide-react';
 
 const AVATAR_COLORS = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#db2777', '#0891b2'];
 
 export default function App() {
-  // Room & Identity State
-  const [roomId, setRoomId] = useState<string>('');
+  // Synchronous URL param extraction so second device is immediately in the correct room!
+  const [roomId, setRoomId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('room') || '';
+    }
+    return '';
+  });
+
+  const [roomPassword, setRoomPassword] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('pwd') || '';
+    }
+    return '';
+  });
+
   const [userName, setUserName] = useState<string>('');
   const [userColor, setUserColor] = useState<string>('#e11d48');
   const [userId] = useState<string>(() => 'usr_' + Math.random().toString(36).substring(2, 9));
-  const [roomPassword, setRoomPassword] = useState<string>('');
   const [cryptoKey, setCryptoKey] = useState<CryptoKey | null>(null);
   const [isJoined, setIsJoined] = useState<boolean>(false);
   const [isHost, setIsHost] = useState<boolean>(false);
   const [roomName, setRoomName] = useState<string>('Sinema Odası');
 
-  // Share Modal State
+  // Share Modal & Chat Toggle State
   const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= 1024; // Open by default on desktop, closed on mobile
+    }
+    return true;
+  });
 
-  // Media & Video Sync State - INITIAL PLAYER IS EMPTY (NO AUTOPLAY)
+  // Empty initial video state (no autoplay on initial site load)
   const [videoState, setVideoState] = useState<VideoState>({
     sourceType: 'youtube',
-    sourceUrl: '', // EMPTY INITIAL STATE
+    sourceUrl: '',
     sourceTitle: 'İçerik Bekleniyor',
     isPlaying: false,
     currentTime: 0,
@@ -51,7 +71,7 @@ export default function App() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [hasCamera, setHasCamera] = useState<boolean>(false);
   const [hasMic, setHasMic] = useState<boolean>(true);
-  const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false); // default open mic so sound works immediately
+  const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false); // default open mic so voice is heard immediately
   const [isPushToTalkActive, setIsPushToTalkActive] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [speakingVolume, setSpeakingVolume] = useState<number>(0);
@@ -64,24 +84,10 @@ export default function App() {
 
   // UI Navigation Tabs
   const [activeTab, setActiveTab] = useState<'cinema' | 'discovery' | 'settings'>('cinema');
-  const [isCopied, setIsCopied] = useState<boolean>(false);
 
   const isPttKeyDownRef = useRef<boolean>(false);
 
-  // 1. Initial URL search params check
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlRoom = params.get('room');
-    const urlPwd = params.get('pwd');
-    if (urlRoom) {
-      setRoomId(urlRoom);
-    }
-    if (urlPwd) {
-      setRoomPassword(urlPwd);
-    }
-  }, []);
-
-  // 2. Push-To-Talk Keyboard Listener (Space or V)
+  // 1. Push-To-Talk Keyboard Listener (Space or V)
   useEffect(() => {
     if (!isJoined || !isPushToTalkMode) return;
 
@@ -122,11 +128,10 @@ export default function App() {
     };
   }, [isJoined, isPushToTalkMode]);
 
-  // 3. Socket event subscriptions & WebRTC Signaling
+  // 2. Socket Event Subscriptions & Multi-Device Peer Handling
   useEffect(() => {
     if (!isJoined) return;
 
-    // Set WebRTC callbacks
     webrtc.setCallbacks(
       (streams) => {
         setRemoteStreams(new Map(streams));
@@ -146,7 +151,6 @@ export default function App() {
       }
       if (data.users) {
         setUsers(data.users);
-        // Initiate peer connection to other existing users in the room
         data.users.forEach((otherUser: RoomUser) => {
           if (otherUser.id !== userId) {
             webrtc.createPeer(otherUser.id, true);
@@ -162,7 +166,6 @@ export default function App() {
         setUsers(data.allUsers);
       }
       if (data?.user && data.user.id !== userId) {
-        // Create peer connection to newcomer
         webrtc.createPeer(data.user.id, true);
 
         setMessages((prev) => [
@@ -205,7 +208,7 @@ export default function App() {
       }
     });
 
-    // WebRTC Signaling Handlers
+    // WebRTC Signaling
     const unsubOffer = socket.on('signal:offer', ({ data, senderId }) => {
       if (senderId && senderId !== userId) {
         webrtc.handleOffer(senderId, data);
@@ -232,14 +235,46 @@ export default function App() {
       }
     });
 
-    // E. User State Update (Mic, Cam, Screen, Speaking)
+    // E. User State Update
     const unsubUserState = socket.on('user:state_update', ({ userId: targetUserId, data }) => {
       setUsers((prev) =>
         prev.map((u) => (u.id === targetUserId ? { ...u, ...data } : u))
       );
     });
 
-    // F. Chat Message with E2EE Decryption
+    // F. Room Password Update
+    const unsubPasswordUpdate = socket.on('room:password_update', async ({ data }) => {
+      const newPwd = data?.password || '';
+      setRoomPassword(newPwd);
+      if (newPwd) {
+        const key = await deriveKeyFromPassword(newPwd);
+        setCryptoKey(key);
+      } else {
+        setCryptoKey(null);
+      }
+
+      const url = new URL(window.location.href);
+      if (newPwd) url.searchParams.set('pwd', newPwd);
+      else url.searchParams.delete('pwd');
+      window.history.replaceState({}, '', url.toString());
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: 'sys_' + Date.now(),
+          senderId: 'system',
+          senderName: 'Sistem',
+          senderColor: '#10b981',
+          text: newPwd
+            ? 'Oda şifresi güncellendi. Mesajlar yeni anahtarla şifreleniyor.'
+            : 'Oda şifresi kaldırıldı. Artık açık oda.',
+          timestamp: Date.now(),
+          isSystem: true,
+        },
+      ]);
+    });
+
+    // G. Chat Message
     const unsubChatMessage = socket.on('chat:message', async ({ data }) => {
       if (!data) return;
       let displayText = data.text;
@@ -256,7 +291,7 @@ export default function App() {
       ]);
     });
 
-    // G. Emoji Reaction
+    // H. Reactions
     const unsubChatReaction = socket.on('chat:reaction', ({ data }) => {
       if (!data) return;
       setReactions((prev) => [...prev, data]);
@@ -265,7 +300,7 @@ export default function App() {
       }, 3000);
     });
 
-    // H. Vote Update
+    // I. Vote Update
     const unsubVoteUpdate = socket.on('vote:update', ({ data }) => {
       setActiveVote(data);
     });
@@ -279,6 +314,7 @@ export default function App() {
       unsubCandidate();
       unsubSyncVideo();
       unsubUserState();
+      unsubPasswordUpdate();
       unsubChatMessage();
       unsubChatReaction();
       unsubVoteUpdate();
@@ -300,14 +336,11 @@ export default function App() {
     const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
     setUserColor(randomColor);
 
-    // Derive E2EE key if password provided
-    let key: CryptoKey | null = null;
     if (password.trim()) {
-      key = await deriveKeyFromPassword(password.trim());
+      const key = await deriveKeyFromPassword(password.trim());
       setCryptoKey(key);
     }
 
-    // Update URL query parameters for easy copy & sharing
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set('room', targetRoom);
     if (password.trim()) {
@@ -315,11 +348,10 @@ export default function App() {
     }
     window.history.replaceState({}, '', newUrl.toString());
 
-    // Initialize WebRTC and Socket
     webrtc.setUserId(userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
-    // Request both camera and mic on join so user has ready media
+    // Request camera and microphone immediately
     const stream = await webrtc.startLocalMedia(true, true);
     if (stream) {
       setLocalStream(stream);
@@ -327,12 +359,29 @@ export default function App() {
       setHasMic(stream.getAudioTracks().length > 0);
     }
 
-    // Connect socket
     socket.init(targetRoom, userId, name, randomColor, asHost);
     setIsJoined(true);
   };
 
-  // Video State Update & Broadcast
+  // Host Password Update
+  const handleHostUpdatePassword = async (newPassword: string) => {
+    setRoomPassword(newPassword);
+    if (newPassword.trim()) {
+      const key = await deriveKeyFromPassword(newPassword.trim());
+      setCryptoKey(key);
+    } else {
+      setCryptoKey(null);
+    }
+
+    const url = new URL(window.location.href);
+    if (newPassword.trim()) url.searchParams.set('pwd', newPassword.trim());
+    else url.searchParams.delete('pwd');
+    window.history.replaceState({}, '', url.toString());
+
+    socket.updatePassword(newPassword.trim());
+  };
+
+  // Video State Update
   const handleUpdateVideo = (update: Partial<VideoState>) => {
     const nextState = {
       ...videoState,
@@ -344,7 +393,7 @@ export default function App() {
     socket.syncVideo(nextState);
   };
 
-  // 1080p Screen & Tab Sharing (Netflix & Video Sites)
+  // 1080p Screen & Tab Sharing
   const handleStartScreenShare = async () => {
     const stream = await webrtc.startHighQualityScreenShare();
     if (stream) {
@@ -370,7 +419,6 @@ export default function App() {
     });
   };
 
-  // Push-To-Talk Toggle
   const handleTogglePushToTalkMode = (enabled: boolean) => {
     setIsPushToTalkMode(enabled);
     webrtc.setPushToTalkMode(enabled);
@@ -381,12 +429,10 @@ export default function App() {
     webrtc.triggerPushToTalk(active);
   };
 
-  // Camera & Mic Toggles
   const handleToggleCamera = async () => {
     const nextState = !hasCamera;
     setHasCamera(nextState);
 
-    // If stream doesn't have video track or is null, request with camera
     if (nextState && (!localStream || localStream.getVideoTracks().length === 0)) {
       const stream = await webrtc.startLocalMedia(true, hasMic);
       if (stream) {
@@ -411,7 +457,6 @@ export default function App() {
     }
   };
 
-  // Chat message submission
   const handleSendMessage = async (text: string) => {
     const msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     let ciphertext = text;
@@ -449,7 +494,6 @@ export default function App() {
     ]);
   };
 
-  // Floating Emoji Reaction Trigger
   const handleTriggerReaction = (emoji: string) => {
     const reaction: EmojiReaction = {
       id: 'rx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
@@ -466,7 +510,6 @@ export default function App() {
     }, 3000);
   };
 
-  // Movie Discovery: Load into Cinema
   const handleLoadMovieIntoCinema = (title: string, url: string) => {
     handleUpdateVideo({
       sourceType: 'youtube',
@@ -478,7 +521,6 @@ export default function App() {
     setActiveTab('cinema');
   };
 
-  // Movie Discovery: Start Poll
   const handleStartVote = (movie: MovieSuggestion) => {
     const voteData = {
       id: 'vote_' + Date.now(),
@@ -492,7 +534,6 @@ export default function App() {
     socket.updateVote(voteData);
   };
 
-  // Movie Discovery: Cast Vote
   const handleCastVote = (vote: 'yes' | 'no') => {
     if (!activeVote) return;
     const yes = new Set(activeVote.yesVotes);
@@ -517,7 +558,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col font-sans">
-      {/* 1. Room Creation / Join Modal (if not joined) */}
+      {/* 1. Room Creation / Join Modal */}
       {!isJoined && (
         <RoomModal
           initialRoomId={roomId}
@@ -526,7 +567,7 @@ export default function App() {
         />
       )}
 
-      {/* 2. Share Room Modal (Room Code + Link Copy) */}
+      {/* 2. Share Room Modal with Host Password Management */}
       <ShareRoomModal
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
@@ -534,9 +575,11 @@ export default function App() {
         roomName={roomName}
         hasPassword={Boolean(cryptoKey || roomPassword)}
         password={roomPassword}
+        isHost={isHost}
+        onUpdatePassword={handleHostUpdatePassword}
       />
 
-      {/* 3. Top Bar Navigation */}
+      {/* 3. Top Bar Navigation with Chat Toggle */}
       <Header
         roomId={roomId}
         roomName={roomName}
@@ -545,16 +588,17 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onShareRoom={() => setIsShareModalOpen(true)}
-        isCopied={isCopied}
+        isChatOpen={isChatOpen}
+        onToggleChat={() => setIsChatOpen(!isChatOpen)}
       />
 
       {/* 4. Main Body Content Area */}
-      <main className="flex-1 p-3 md:p-5 max-w-[1720px] w-full mx-auto flex flex-col gap-4">
+      <main className="flex-1 p-2.5 sm:p-4 max-w-[1720px] w-full mx-auto flex flex-col gap-3 sm:gap-4">
         {/* TAB 1: Sinema Sahnesi & Birlikte İzleme */}
         {activeTab === 'cinema' && (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4">
-            <div className="lg:col-span-8 xl:col-span-9 flex flex-col gap-3">
-              {/* Primary Cinema Video Player with auto-hide controls & fullscreen cameras */}
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 relative">
+            {/* Video Stage & Camera Strip: Expands to full 12 cols when chat is closed */}
+            <div className={`flex flex-col gap-3 transition-all ${isChatOpen ? 'lg:col-span-8 xl:col-span-9' : 'lg:col-span-12'}`}>
               <CinemaStage
                 videoState={videoState}
                 onUpdateVideo={handleUpdateVideo}
@@ -573,7 +617,6 @@ export default function App() {
                 hasCamera={hasCamera}
               />
 
-              {/* Resizable Camera Grid & Push-To-Talk Control Bar */}
               <CameraGrid
                 users={users.length > 0 ? users : [{
                   id: userId,
@@ -602,33 +645,46 @@ export default function App() {
               />
             </div>
 
-            {/* Right Side: Live Encrypted Chat & Reactions */}
-            <div className="lg:col-span-4 xl:col-span-3 h-[520px] lg:h-[calc(100vh-120px)] sticky top-16">
-              <ChatPanel
-                messages={messages}
-                onSendMessage={handleSendMessage}
-                users={users.length > 0 ? users : [{
-                  id: userId,
-                  name: userName || 'Sen',
-                  avatarColor: userColor,
-                  isHost,
-                  hasCamera,
-                  hasMic,
-                  isSpeaking,
-                  isSharingScreen,
-                  joinedAt: Date.now(),
-                }]}
-                currentUserId={userId}
-                isEncrypted={Boolean(cryptoKey)}
-                onTriggerReaction={handleTriggerReaction}
-              />
-            </div>
+            {/* Live Chat Panel (Togglable: Can be closed/opened at will) */}
+            {isChatOpen ? (
+              <div className="lg:col-span-4 xl:col-span-3 h-[420px] lg:h-[calc(100vh-100px)] sticky top-14">
+                <ChatPanel
+                  messages={messages}
+                  onSendMessage={handleSendMessage}
+                  users={users.length > 0 ? users : [{
+                    id: userId,
+                    name: userName || 'Sen',
+                    avatarColor: userColor,
+                    isHost,
+                    hasCamera,
+                    hasMic,
+                    isSpeaking,
+                    isSharingScreen,
+                    joinedAt: Date.now(),
+                  }]}
+                  currentUserId={userId}
+                  isEncrypted={Boolean(cryptoKey)}
+                  onTriggerReaction={handleTriggerReaction}
+                  onClose={() => setIsChatOpen(false)}
+                />
+              </div>
+            ) : (
+              /* Floating Button when Chat is Closed to Reopen with 1 Click */
+              <button
+                onClick={() => setIsChatOpen(true)}
+                className="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-xl shadow-rose-950/60 transition-all hover:scale-105 active:scale-95 font-semibold text-xs border border-rose-400/30"
+                title="Canlı Sohbeti Aç"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>Sohbet ({messages.filter(m => !m.isSystem).length})</span>
+              </button>
+            )}
           </div>
         )}
 
         {/* TAB 2: Film Keşfet & AI Öneri Motoru */}
         {activeTab === 'discovery' && (
-          <div className="flex-1 max-w-5xl mx-auto w-full h-[calc(100vh-120px)]">
+          <div className="flex-1 max-w-5xl mx-auto w-full h-[calc(100vh-100px)]">
             <MovieDiscovery
               onLoadMovieIntoCinema={handleLoadMovieIntoCinema}
               isHost={isHost}
@@ -642,53 +698,43 @@ export default function App() {
 
         {/* TAB 3: Oda Ayarları & Şifreleme Bilgisi */}
         {activeTab === 'settings' && (
-          <div className="flex-1 max-w-3xl mx-auto w-full bg-[#0e1424] border border-slate-800/80 rounded-xl p-6 shadow-xl space-y-6">
+          <div className="flex-1 max-w-3xl mx-auto w-full bg-[#0e1424] border border-slate-800/80 rounded-xl p-4 sm:p-6 shadow-xl space-y-4 sm:space-y-6">
             <div>
-              <h2 className="text-base font-bold text-white mb-1">Oda & Güvenlik Ayarları</h2>
-              <p className="text-xs text-slate-400">
+              <h2 className="text-sm sm:text-base font-bold text-white mb-1">Oda & Güvenlik Ayarları</h2>
+              <p className="text-[11px] sm:text-xs text-slate-400">
                 Oda bağlantısını ve kodunu arkadaşlarınızla paylaşın veya uçtan uca şifreleme detaylarını inceleyin.
               </p>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+            <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
               <span className="text-xs font-semibold text-slate-300 block">
-                Oda Paylaşım Bilgisi
+                Oda Bilgisi
               </span>
-              <div className="flex flex-col sm:flex-row items-center gap-3">
-                <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-400">Oda Kodu:</span>
-                  <span className="font-mono text-lg font-bold text-rose-400 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+                  <span className="font-mono text-base sm:text-lg font-bold text-rose-400 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
                     {roomId}
                   </span>
                 </div>
                 <button
                   onClick={() => setIsShareModalOpen(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shadow-sm w-full sm:w-auto justify-center"
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shadow-sm"
                 >
                   <span>Paylaşım Penceresini Aç</span>
                 </button>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+            <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
               <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
                 <h3 className="text-xs font-bold text-white">Uçtan Uca Şifreleme (AES-GCM 256-bit)</h3>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <p className="text-[11px] sm:text-xs text-slate-400 leading-relaxed">
                 Odanız {cryptoKey ? 'oda parolasıyla uçtan uca şifrelenmiştir.' : 'şifresiz genel odadır.'}
                 {cryptoKey &&
                   ' Mesajlarınız ve anlık tepkileriniz tarayıcınızda PBKDF2 (100.000 iterasyon) ile türetilen AES-GCM anahtarıyla şifrelenir. Sunucu dahil hiç kimse mesaj içeriğini okuyamaz.'}
-              </p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-              <div className="flex items-center gap-2">
-                <MonitorUp className="w-5 h-5 text-rose-400" />
-                <h3 className="text-xs font-bold text-white">Netflix & Film Sitelerini Beraber İzleme İpucu</h3>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Netflix, Disney+, Prime Video veya herhangi bir film sitesinden bir içerik izlemek istediğinizde, üst kısımdaki <strong>"Ekran / Film Sekmesi Paylaş"</strong> butonuna basın ve filmin açık olduğu <strong>Tarayıcı Sekmesini</strong> seçin. <em>"Sekme sesini de paylaş"</em> seçeneğinin işaretli olduğundan emin olun. Görüntü 1080p 60fps yüksek bit-rate ve stereo film sesiyle odaya aktarılacaktır.
               </p>
             </div>
           </div>

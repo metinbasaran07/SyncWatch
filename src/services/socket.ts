@@ -8,16 +8,27 @@ class SocketClient {
   private listeners: Map<string, Set<MessageHandler>> = new Map();
   private roomId: string = '';
   private userId: string = '';
+  private userName: string = '';
+  private userColor: string = '';
+  private isHost: boolean = false;
   private isConnecting: boolean = false;
   private reconnectTimer: any = null;
+  private heartbeatTimer: any = null;
+  private pollTimer: any = null;
+  private lastPollTimestamp: number = 0;
 
   public init(roomId: string, userId: string, userName: string, userColor: string, isHost: boolean) {
     this.roomId = roomId;
     this.userId = userId;
+    this.userName = userName;
+    this.userColor = userColor;
+    this.isHost = isHost;
 
-    // Initialize BroadcastChannel as local mesh fallback across browser tabs
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        if (this.broadcastChannel) {
+          this.broadcastChannel.close();
+        }
         this.broadcastChannel = new BroadcastChannel(`cinesync_room_${roomId}`);
         this.broadcastChannel.onmessage = (event) => {
           const msg = event.data;
@@ -27,19 +38,20 @@ class SocketClient {
         };
       }
     } catch (e) {
-      console.warn('BroadcastChannel not supported in this environment');
+      console.warn('BroadcastChannel not supported');
     }
 
-    this.connectWebSocket(roomId, userId, userName, userColor, isHost);
+    this.connectWebSocket();
+    this.startHttpPollingFallback();
   }
 
-  private connectWebSocket(roomId: string, userId: string, userName: string, userColor: string, isHost: boolean) {
+  private connectWebSocket() {
     if (this.isConnecting) return;
     this.isConnecting = true;
 
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
@@ -49,22 +61,31 @@ class SocketClient {
           this.reconnectTimer = null;
         }
 
-        // Send Join Room Packet
+        // Send Join Room Packet immediately
         this.send({
           type: 'join-room',
-          roomId,
-          userId,
-          userName,
-          userColor,
-          isHost,
+          roomId: this.roomId,
+          userId: this.userId,
+          userName: this.userName,
+          userColor: this.userColor,
+          isHost: this.isHost,
         });
 
         this.emitLocal('connection:status', { connected: true, mode: 'websocket' });
+
+        // Heartbeat keep-alive every 15 seconds
+        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'ping', roomId: this.roomId, userId: this.userId }));
+          }
+        }, 15000);
       };
 
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.type === 'pong') return;
           this.emitLocal(msg.type, msg.data ?? msg, msg.senderId);
         } catch (e) {
           console.error('WS parse error:', e);
@@ -72,25 +93,62 @@ class SocketClient {
       };
 
       this.ws.onerror = (err) => {
-        console.warn('WebSocket error, falling back to local mesh/HTTP:', err);
-        this.emitLocal('connection:status', { connected: false, mode: 'fallback' });
+        console.warn('WebSocket error, utilizing HTTP sync:', err);
       };
 
       this.ws.onclose = () => {
         this.isConnecting = false;
+        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
         this.emitLocal('connection:status', { connected: false, mode: 'reconnecting' });
-        // Attempt reconnect after 3 seconds
+
+        // Rapid auto-reconnect after 1.5s
         if (!this.reconnectTimer) {
           this.reconnectTimer = setTimeout(() => {
-            this.connectWebSocket(roomId, userId, userName, userColor, isHost);
-          }, 3000);
+            this.connectWebSocket();
+          }, 1500);
         }
       };
     } catch (err) {
       this.isConnecting = false;
-      console.warn('WebSocket init failed, using BroadcastChannel:', err);
-      this.emitLocal('connection:status', { connected: true, mode: 'broadcast' });
+      console.warn('WebSocket connection init failed:', err);
     }
+  }
+
+  // HTTP polling fallback for cross-device resilience
+  private startHttpPollingFallback() {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.lastPollTimestamp = Date.now();
+
+    this.pollTimer = setInterval(async () => {
+      // If WebSocket is actively open, we don't need heavy HTTP polling
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      if (!this.roomId) return;
+
+      try {
+        const res = await fetch('/api/signaling', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomId: this.roomId,
+            fetchSince: this.lastPollTimestamp,
+          }),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          this.lastPollTimestamp = json.now || Date.now();
+          if (Array.isArray(json.messages)) {
+            for (const msg of json.messages) {
+              if (msg.senderId !== this.userId) {
+                this.emitLocal(msg.type, msg.data ?? msg, msg.senderId);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // network silent retry
+      }
+    }, 2000);
   }
 
   public on(event: string, handler: MessageHandler) {
@@ -119,21 +177,32 @@ class SocketClient {
     };
 
     // 1. Send via WebSocket if open
+    let sentViaWs = false;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(enriched));
+      sentViaWs = true;
     }
 
-    // 2. Broadcast locally across tabs (so friends on multiple tabs/windows stay 100% in sync)
+    // 2. BroadcastChannel local across tabs
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(enriched);
-      } catch (e) {
-        // channel closed or busy
-      }
+      } catch (e) {}
+    }
+
+    // 3. If WS is closed or error, send via HTTP signaling endpoint so other devices receive it
+    if (!sentViaWs && this.roomId) {
+      fetch('/api/signaling', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId: this.roomId,
+          message: enriched,
+        }),
+      }).catch(() => {});
     }
   }
 
-  // High-level CineSync Actions
   public syncVideo(videoState: Partial<VideoState>) {
     this.send({
       type: 'sync:video',
@@ -178,8 +247,17 @@ class SocketClient {
     });
   }
 
+  public updatePassword(password: string) {
+    this.send({
+      type: 'room:password_update',
+      data: { password },
+    });
+  }
+
   public disconnect() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.ws) {
       this.ws.close();
       this.ws = null;

@@ -14,12 +14,11 @@ import {
   Sparkles,
   Radio,
   Film,
-  Camera,
   Eye,
   EyeOff,
-  VideoOff,
-  Mic,
-  MicOff,
+  LayoutGrid,
+  Columns,
+  Rows,
 } from 'lucide-react';
 import { VideoState, EmojiReaction, RoomUser } from '../types';
 
@@ -73,10 +72,11 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [sourceInput, setSourceInput] = useState<string>('');
   const [sourceTypeSelect, setSourceTypeSelect] = useState<'youtube' | 'direct'>('youtube');
   
-  // Fullscreen and Auto-hide controls
+  // Fullscreen, position & Auto-hide controls
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isControlsVisible, setIsControlsVisible] = useState<boolean>(true);
   const [showFullscreenCameras, setShowFullscreenCameras] = useState<boolean>(true);
+  const [fullscreenCameraPosition, setFullscreenCameraPosition] = useState<'bottom' | 'right'>('bottom');
 
   const containerRef = useRef<HTMLDivElement>(null);
   const htmlVideoRef = useRef<HTMLVideoElement>(null);
@@ -85,6 +85,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const ytContainerRef = useRef<HTMLDivElement>(null);
   const isInternalChangeRef = useRef<boolean>(false);
   const hideControlsTimerRef = useRef<any>(null);
+  const fullscreenLocalVideoRef = useRef<HTMLVideoElement>(null);
 
   // Fullscreen change listener
   useEffect(() => {
@@ -102,6 +103,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     };
   }, []);
 
+  // Bind local stream to fullscreen local video element
+  useEffect(() => {
+    if (fullscreenLocalVideoRef.current && localStream) {
+      fullscreenLocalVideoRef.current.srcObject = localStream;
+      fullscreenLocalVideoRef.current.play().catch(() => {});
+    }
+  }, [localStream, isFullscreen, showFullscreenCameras, hasCamera]);
+
   // YouTube-like auto hide controls logic
   const triggerControlsActivity = useCallback(() => {
     setIsControlsVisible(true);
@@ -109,7 +118,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       clearTimeout(hideControlsTimerRef.current);
     }
 
-    // Hide controls after 2.5s of idle if playing or in fullscreen
     if (videoState.isPlaying || isFullscreen) {
       hideControlsTimerRef.current = setTimeout(() => {
         setIsControlsVisible(false);
@@ -127,7 +135,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     }
   };
 
-  // Helper to extract YouTube ID
   const extractYouTubeId = (url: string): string => {
     if (!url) return '';
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -153,9 +160,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         if (ytPlayerRef.current) {
           try {
             ytPlayerRef.current.loadVideoById(videoId, videoState.currentTime);
-          } catch (e) {
-            // Player might be regenerating
-          }
+          } catch (e) {}
         } else if (ytContainerRef.current) {
           ytPlayerRef.current = new window.YT.Player(ytContainerRef.current, {
             videoId,
@@ -236,9 +241,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       setTimeout(() => {
         isInternalChangeRef.current = false;
       }, 250);
-    } catch (e) {
-      // player might still be loading
-    }
+    } catch (e) {}
   }, [videoState.isPlaying, videoState.currentTime]);
 
   // 3. HTML5 Direct Video External Sync Listener
@@ -392,76 +395,89 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     >
       {/* 1. TOP MEDIA BAR (Auto-hides like YouTube) */}
       <div
-        className={`absolute top-0 left-0 right-0 z-30 flex items-center justify-between p-3.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent transition-all duration-300 ${
+        className={`absolute top-0 left-0 right-0 z-30 flex items-center justify-between p-2.5 sm:p-3.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent transition-all duration-300 ${
           isControlsVisible || !videoState.isPlaying || isVideoEmpty
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 -translate-y-4 pointer-events-none'
         }`}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           {videoState.sourceType === 'screenshare' ? (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-600/90 text-white font-medium text-xs shadow-sm">
-              <Radio className="w-3.5 h-3.5 animate-pulse" />
-              1080p 60fps Canlı Sekme Yayını (Netflix & Siteler)
+            <span className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded bg-rose-600/90 text-white font-medium text-[11px] sm:text-xs shadow-sm">
+              <Radio className="w-3 h-3 animate-pulse" />
+              1080p60 Canlı Yayın
             </span>
           ) : videoState.sourceType === 'youtube' && videoState.sourceUrl ? (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-red-600/90 text-white font-medium text-xs shadow-sm">
-              <Youtube className="w-3.5 h-3.5" />
-              YouTube Sync
+            <span className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded bg-red-600/90 text-white font-medium text-[11px] sm:text-xs shadow-sm">
+              <Youtube className="w-3 h-3" />
+              YouTube
             </span>
           ) : videoState.sourceUrl ? (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-600/90 text-white font-medium text-xs shadow-sm">
-              <Tv className="w-3.5 h-3.5" />
-              Doğrudan Medya
+            <span className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded bg-blue-600/90 text-white font-medium text-[11px] sm:text-xs shadow-sm">
+              <Tv className="w-3 h-3" />
+              Medya
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-medium text-xs border border-slate-700">
-              <Film className="w-3.5 h-3.5 text-rose-500" />
-              Sinema Sahnesi
+            <span className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded bg-slate-800 text-slate-300 font-medium text-[11px] sm:text-xs border border-slate-700">
+              <Film className="w-3 h-3 text-rose-500" />
+              Sinema
             </span>
           )}
 
-          <span className="text-xs font-semibold text-slate-200 truncate max-w-xs md:max-w-md">
+          <span className="text-[11px] sm:text-xs font-semibold text-slate-200 truncate max-w-[130px] sm:max-w-xs md:max-w-md">
             {videoState.sourceTitle || 'İçerik Seçilmedi'}
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Fullscreen Camera Toggle Button */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Fullscreen Camera Controls: Toggle & Position (Alt / Sağ) */}
           {isFullscreen && (
-            <button
-              onClick={() => setShowFullscreenCameras(!showFullscreenCameras)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors whitespace-nowrap"
-              title="Tam ekranda kamera kutularını aç/kapat"
-            >
-              {showFullscreenCameras ? <EyeOff className="w-3.5 h-3.5 text-rose-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-400" />}
-              <span>{showFullscreenCameras ? 'Kameraları Gizle' : 'Kameraları Göster'}</span>
-            </button>
+            <div className="flex items-center gap-1 bg-black/60 backdrop-blur-sm p-1 rounded-lg border border-slate-700/60">
+              <button
+                onClick={() => setShowFullscreenCameras(!showFullscreenCameras)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-800 rounded transition-colors whitespace-nowrap"
+                title="Tam ekranda kameraları aç/kapat"
+              >
+                {showFullscreenCameras ? <EyeOff className="w-3.5 h-3.5 text-rose-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-400" />}
+                <span className="hidden sm:inline">{showFullscreenCameras ? 'Kameraları Gizle' : 'Kameraları Göster'}</span>
+              </button>
+
+              {showFullscreenCameras && (
+                <button
+                  onClick={() => setFullscreenCameraPosition(fullscreenCameraPosition === 'bottom' ? 'right' : 'bottom')}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                  title="Kameraları Alt veya Sağ Tarafına Sabitle"
+                >
+                  {fullscreenCameraPosition === 'bottom' ? <Columns className="w-3.5 h-3.5 text-rose-400" /> : <Rows className="w-3.5 h-3.5 text-rose-400" />}
+                  <span className="hidden sm:inline">{fullscreenCameraPosition === 'bottom' ? 'Sağa Sabitle' : 'Alta Sabitle'}</span>
+                </button>
+              )}
+            </div>
           )}
 
           <button
             onClick={() => setShowSourceModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-200 bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors whitespace-nowrap shadow-sm"
+            className="flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 text-[11px] sm:text-xs font-medium text-slate-200 bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors whitespace-nowrap shadow-sm"
           >
-            <LinkIcon className="w-3.5 h-3.5 text-rose-400" />
-            <span>{isVideoEmpty ? 'Video Ekle' : 'Video Değiştir'}</span>
+            <LinkIcon className="w-3 h-3 text-rose-400" />
+            <span>{isVideoEmpty ? 'Video Ekle' : 'Değiştir'}</span>
           </button>
 
           {isSharingScreen ? (
             <button
               onClick={onStopScreenShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-rose-700 hover:bg-rose-600 rounded-lg transition-colors whitespace-nowrap shadow-sm"
+              className="flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 text-[11px] sm:text-xs font-medium text-white bg-rose-700 hover:bg-rose-600 rounded-lg transition-colors whitespace-nowrap shadow-sm"
             >
-              <span>Yayını Durdur</span>
+              <span>Durdur</span>
             </button>
           ) : (
             <button
               onClick={onStartScreenShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors whitespace-nowrap shadow-sm"
-              title="Netflix veya film açtığınız sekme/ekranı 1080p60 kalitesinde sesli olarak odaya aktarın"
+              className="flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 text-[11px] sm:text-xs font-medium text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors whitespace-nowrap shadow-sm"
+              title="Netflix veya film açtığınız sekme/ekranı 1080p60 kalitesinde aktarın"
             >
-              <MonitorUp className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Ekran / Film Sekmesi Paylaş</span>
+              <MonitorUp className="w-3 h-3 text-emerald-400" />
+              <span className="hidden sm:inline">Sekme Paylaş</span>
             </button>
           )}
         </div>
@@ -488,65 +504,74 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         ))}
       </div>
 
-      {/* 3. FULLSCREEN CAMERA PIP OVERLAY */}
+      {/* 3. FULLSCREEN CAMERAS: FIXED TO RIGHT OR BOTTOM */}
       {isFullscreen && showFullscreenCameras && (
-        <div className="absolute bottom-16 right-4 z-40 flex flex-wrap max-w-sm gap-2 p-2 bg-black/70 backdrop-blur-md rounded-xl border border-slate-700/80 shadow-2xl pointer-events-auto">
+        <div
+          className={`absolute z-40 p-2 bg-black/75 backdrop-blur-md rounded-xl border border-slate-700/80 shadow-2xl pointer-events-auto transition-all ${
+            fullscreenCameraPosition === 'right'
+              ? 'top-16 bottom-16 right-4 flex flex-col gap-2 max-h-[calc(100vh-120px)] w-48 overflow-y-auto scrollbar-thin'
+              : 'bottom-16 left-4 right-4 flex flex-row gap-2 overflow-x-auto scrollbar-thin max-w-full justify-center sm:justify-start'
+          }`}
+        >
           {/* Local camera in fullscreen PIP */}
-          <div className="relative w-28 h-20 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center">
-            {hasCamera && localStream ? (
+          <div className="relative w-36 h-24 sm:w-40 sm:h-28 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center shrink-0">
+            {localStream && localStream.getVideoTracks().length > 0 ? (
               <video
-                ref={(el) => {
-                  if (el) el.srcObject = localStream;
-                }}
+                ref={fullscreenLocalVideoRef}
                 autoPlay
                 playsInline
                 muted
                 className="w-full h-full object-cover transform -scale-x-100"
               />
             ) : (
-              <div className="flex flex-col items-center justify-center text-[10px] text-slate-400">
-                <div className="w-6 h-6 rounded-full bg-rose-600/30 text-rose-300 flex items-center justify-center font-bold text-xs">
+              <div className="flex flex-col items-center justify-center text-[10px] text-slate-400 p-2 text-center">
+                <div className="w-8 h-8 rounded-full bg-rose-600/30 text-rose-300 flex items-center justify-center font-bold text-xs mb-1">
                   Sen
                 </div>
                 <span>Kamera Kapalı</span>
               </div>
             )}
-            <div className="absolute bottom-1 left-1 bg-black/70 text-[9px] px-1 rounded text-white">
+            <div className="absolute bottom-1 left-1 bg-black/70 text-[9px] px-1.5 py-0.5 rounded text-white font-medium">
               Sen
             </div>
           </div>
 
-          {/* Remote camera tiles in fullscreen PIP */}
+          {/* Remote camera tiles in fullscreen */}
           {users
             .filter((u) => u.id !== currentUserId)
             .map((user) => {
               const remoteStream = remoteStreams.get(user.id);
+              const hasRemoteVideo = Boolean(remoteStream && remoteStream.getVideoTracks().length > 0 && remoteStream.getVideoTracks()[0].enabled);
+
               return (
                 <div
                   key={user.id}
-                  className="relative w-28 h-20 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center"
+                  className="relative w-36 h-24 sm:w-40 sm:h-28 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center shrink-0"
                 >
-                  {remoteStream ? (
+                  {hasRemoteVideo ? (
                     <video
                       ref={(el) => {
-                        if (el) el.srcObject = remoteStream;
+                        if (el && remoteStream) {
+                          el.srcObject = remoteStream;
+                          el.play().catch(() => {});
+                        }
                       }}
                       autoPlay
                       playsInline
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="flex flex-col items-center justify-center text-[10px] text-slate-400">
+                    <div className="flex flex-col items-center justify-center text-[10px] text-slate-400 p-2 text-center">
                       <div
-                        className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs text-white"
+                        className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white mb-1 shadow-sm"
                         style={{ backgroundColor: user.avatarColor || '#3b82f6' }}
                       >
                         {user.name.substring(0, 2).toUpperCase()}
                       </div>
-                      <span className="truncate max-w-[90px]">{user.name}</span>
+                      <span className="truncate max-w-[100px]">{user.name}</span>
                     </div>
                   )}
-                  <div className="absolute bottom-1 left-1 bg-black/70 text-[9px] px-1 rounded text-white truncate max-w-[90px]">
+                  <div className="absolute bottom-1 left-1 bg-black/70 text-[9px] px-1.5 py-0.5 rounded text-white truncate max-w-[100px] font-medium">
                     {user.name}
                   </div>
                 </div>
@@ -559,29 +584,30 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       <div className="relative w-full aspect-video bg-[#05070d] flex items-center justify-center overflow-hidden">
         {/* EMPTY STATE: When player is empty on initial site opening */}
         {isVideoEmpty ? (
-          <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-[#0e1629] via-[#090d16] to-[#05070d]">
-            <div className="w-16 h-16 rounded-2xl bg-rose-600/10 border border-rose-500/20 text-rose-500 flex items-center justify-center mb-3 shadow-inner">
-              <Film className="w-8 h-8" />
+          <div className="w-full h-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-gradient-to-b from-[#0e1629] via-[#090d16] to-[#05070d]">
+            <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl bg-rose-600/10 border border-rose-500/20 text-rose-500 flex items-center justify-center mb-2.5 sm:mb-3 shadow-inner">
+              <Film className="w-6 h-6 sm:w-8 sm:h-8" />
             </div>
 
-            <h3 className="text-lg md:text-xl font-bold text-white tracking-tight mb-1">
+            <h3 className="text-base sm:text-lg md:text-xl font-bold text-white tracking-tight mb-1">
               Sinema Sahnesi Hazır
             </h3>
-            <p className="text-xs md:text-sm text-slate-400 max-w-md mb-6">
-              Otomatik video başlatılmadı. Beraber izlemek için bir film sekmesi paylaşın veya YouTube bağlantısı girin.
+            <p className="text-[11px] sm:text-xs md:text-sm text-slate-400 max-w-md mb-4 sm:mb-6">
+              Birlikte izlemek için bir film sekmesi paylaşın veya YouTube bağlantısı girin.
             </p>
 
-            {/* Quick Action Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-xl">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full max-w-xl">
               <button
                 onClick={onStartScreenShare}
-                className="flex flex-col items-center text-center p-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/50 transition-all group/btn shadow-md"
+                className="flex sm:flex-col items-center text-left sm:text-center p-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/50 transition-all group/btn shadow-md gap-3 sm:gap-0"
               >
-                <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center mb-2 group-hover/btn:scale-110 transition-transform">
-                  <MonitorUp className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center sm:mb-2 group-hover/btn:scale-110 transition-transform shrink-0">
+                  <MonitorUp className="w-4 h-4" />
                 </div>
-                <span className="text-xs font-bold text-white mb-0.5">Netflix & Film Siteleri</span>
-                <span className="text-[10px] text-slate-400">1080p60 Sesli Sekme Yayını</span>
+                <div>
+                  <span className="text-xs font-bold text-white block mb-0.5">Netflix & Siteler</span>
+                  <span className="text-[10px] text-slate-400 block">1080p60 Sesli Sekme Yayını</span>
+                </div>
               </button>
 
               <button
@@ -589,30 +615,33 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                   setSourceTypeSelect('youtube');
                   setShowSourceModal(true);
                 }}
-                className="flex flex-col items-center text-center p-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-red-500/50 transition-all group/btn shadow-md"
+                className="flex sm:flex-col items-center text-left sm:text-center p-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-red-500/50 transition-all group/btn shadow-md gap-3 sm:gap-0"
               >
-                <div className="w-10 h-10 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center mb-2 group-hover/btn:scale-110 transition-transform">
-                  <Youtube className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center sm:mb-2 group-hover/btn:scale-110 transition-transform shrink-0">
+                  <Youtube className="w-4 h-4" />
                 </div>
-                <span className="text-xs font-bold text-white mb-0.5">YouTube Bağlantısı</span>
-                <span className="text-[10px] text-slate-400">Fragman veya Video Senkronu</span>
+                <div>
+                  <span className="text-xs font-bold text-white block mb-0.5">YouTube Bağlantısı</span>
+                  <span className="text-[10px] text-slate-400 block">Video & Fragman Senkronu</span>
+                </div>
               </button>
 
               <button
                 onClick={() => onOpenDiscovery && onOpenDiscovery()}
-                className="flex flex-col items-center text-center p-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-rose-500/50 transition-all group/btn shadow-md"
+                className="flex sm:flex-col items-center text-left sm:text-center p-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 hover:border-rose-500/50 transition-all group/btn shadow-md gap-3 sm:gap-0"
               >
-                <div className="w-10 h-10 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center mb-2 group-hover/btn:scale-110 transition-transform">
-                  <Sparkles className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center sm:mb-2 group-hover/btn:scale-110 transition-transform shrink-0">
+                  <Sparkles className="w-4 h-4" />
                 </div>
-                <span className="text-xs font-bold text-white mb-0.5">Film Önerisi Al</span>
-                <span className="text-[10px] text-slate-400">Gemini ile Film Keşfet & Oyla</span>
+                <div>
+                  <span className="text-xs font-bold text-white block mb-0.5">Film Önerisi Al</span>
+                  <span className="text-[10px] text-slate-400 block">Gemini ile Film Keşfet & Oyla</span>
+                </div>
               </button>
             </div>
           </div>
         ) : (
           <>
-            {/* Source 1: 1080p Screen & Tab Share (Netflix & Movie Sites) */}
             {videoState.sourceType === 'screenshare' && (
               <video
                 ref={screenVideoRef}
@@ -622,14 +651,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               />
             )}
 
-            {/* Source 2: YouTube IFrame Player */}
             {videoState.sourceType === 'youtube' && (
               <div className="w-full h-full pointer-events-auto">
                 <div ref={ytContainerRef} className="w-full h-full" />
               </div>
             )}
 
-            {/* Source 3: HTML5 Direct Video (MP4 / WebM / HLS) */}
             {videoState.sourceType === 'direct' && (
               <video
                 ref={htmlVideoRef}
@@ -665,15 +692,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               />
             )}
 
-            {/* Play/Pause overlay for Direct Video */}
             {videoState.sourceType !== 'youtube' && videoState.sourceType !== 'screenshare' && (
               <button
                 onClick={handleTogglePlay}
                 className="absolute inset-0 w-full h-full flex items-center justify-center bg-black/10 hover:bg-black/30 transition-colors group/overlay"
               >
                 {!videoState.isPlaying && (
-                  <div className="w-16 h-16 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-lg group-hover/overlay:scale-110 transition-transform">
-                    <Play className="w-8 h-8 ml-1" />
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-lg group-hover/overlay:scale-110 transition-transform">
+                    <Play className="w-7 h-7 sm:w-8 sm:h-8 ml-1" />
                   </div>
                 )}
               </button>
@@ -682,15 +708,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         )}
       </div>
 
-      {/* 5. BOTTOM CINEMA CONTROLS BAR (Auto-hides like YouTube when playing or in fullscreen) */}
+      {/* 5. BOTTOM CINEMA CONTROLS BAR (Auto-hides like YouTube) */}
       <div
-        className={`relative z-30 bg-slate-950/95 border-t border-slate-800/80 px-4 py-2.5 flex flex-col gap-2 transition-all duration-300 ${
+        className={`relative z-30 bg-slate-950/95 border-t border-slate-800/80 px-3 py-2 sm:px-4 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2 transition-all duration-300 ${
           isControlsVisible || !videoState.isPlaying || isVideoEmpty
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >
-        {/* Progress Scrubber (for YouTube & Direct Video) */}
         {!isVideoEmpty && videoState.sourceType !== 'screenshare' && (
           <div className="flex items-center gap-3 w-full">
             <input
@@ -700,24 +725,22 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               step={0.5}
               value={playbackTime}
               onChange={handleSeek}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-600 hover:h-2 transition-all"
+              className="w-full h-1 sm:h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-600 hover:h-2 transition-all"
             />
           </div>
         )}
 
-        {/* Action Controls Row */}
-        <div className="flex items-center justify-between gap-4">
-          {/* Left: Play/Pause, Replay, Time Display */}
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={handleTogglePlay}
-              className="w-8 h-8 rounded-lg bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-colors shadow-sm"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-colors shadow-sm shrink-0"
               title={videoState.isPlaying ? 'Durdur' : 'Oynat'}
             >
               {videoState.isPlaying ? (
-                <Pause className="w-4 h-4" />
+                <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               ) : (
-                <Play className="w-4 h-4 ml-0.5" />
+                <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 ml-0.5" />
               )}
             </button>
 
@@ -731,39 +754,38 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                     htmlVideoRef.current.currentTime = 0;
                   }
                 }}
-                className="p-1.5 text-slate-400 hover:text-slate-200 transition-colors rounded"
+                className="p-1 sm:p-1.5 text-slate-400 hover:text-slate-200 transition-colors rounded"
                 title="Başa Sar"
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             )}
 
-            {/* Time Stamp */}
             {!isVideoEmpty && videoState.sourceType !== 'screenshare' ? (
-              <div className="text-xs font-mono tabular-nums text-slate-400">
+              <div className="text-[11px] sm:text-xs font-mono tabular-nums text-slate-400">
                 <span className="text-slate-200 font-semibold">{formatTime(playbackTime)}</span>
                 <span className="text-slate-600 mx-1">/</span>
                 <span>{formatTime(duration)}</span>
               </div>
             ) : videoState.sourceType === 'screenshare' ? (
-              <div className="flex items-center gap-1.5 text-xs text-rose-400 font-medium">
+              <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-rose-400 font-medium">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                <span>Canlı Sekme Yayını Aktif</span>
+                <span>Canlı Yayın</span>
               </div>
             ) : (
-              <div className="text-xs text-slate-500">
+              <div className="text-[11px] text-slate-500">
                 <span>İçerik bekleniyor</span>
               </div>
             )}
           </div>
 
           {/* Quick Floating Reaction Buttons */}
-          <div className="hidden sm:flex items-center gap-1 bg-slate-900/80 px-2 py-1 rounded-lg border border-slate-800">
+          <div className="hidden sm:flex items-center gap-1 bg-slate-900/80 px-2 py-0.5 rounded-lg border border-slate-800">
             {['🍿', '😂', '🔥', '❤️', '😱', '👏'].map((emoji) => (
               <button
                 key={emoji}
                 onClick={() => onTriggerReaction(emoji)}
-                className="w-7 h-7 flex items-center justify-center rounded hover:bg-slate-800 text-base hover:scale-125 transition-transform"
+                className="w-6 h-6 flex items-center justify-center rounded hover:bg-slate-800 text-sm hover:scale-125 transition-transform"
                 title={`${emoji} tepkisi gönder`}
               >
                 {emoji}
@@ -771,10 +793,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             ))}
           </div>
 
-          {/* Right: Volume & Fullscreen */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {videoState.sourceType === 'direct' && (
-              <div className="flex items-center gap-2 group/vol">
+              <div className="hidden sm:flex items-center gap-2 group/vol">
                 <button
                   onClick={() => {
                     const nextMute = !isMuted;
@@ -800,14 +821,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                       htmlVideoRef.current.muted = false;
                     }
                   }}
-                  className="w-16 h-1 bg-slate-800 rounded accent-slate-300"
+                  className="w-14 sm:w-16 h-1 bg-slate-800 rounded accent-slate-300"
                 />
               </div>
             )}
 
             <button
               onClick={handleToggleFullscreen}
-              className="p-1.5 text-slate-400 hover:text-white transition-colors rounded"
+              className="p-1 sm:p-1.5 text-slate-400 hover:text-white transition-colors rounded"
               title={isFullscreen ? 'Tam Ekrandan Çık' : 'Tam Ekran'}
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -818,14 +839,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
 
       {/* Video Source Picker Modal */}
       {showSourceModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 pointer-events-auto">
-          <div className="bg-[#111827] border border-slate-700/80 rounded-xl p-6 w-full max-w-lg shadow-2xl">
-            <h3 className="text-base font-bold text-white mb-1">Video Kaynağını Belirleyin</h3>
-            <p className="text-xs text-slate-400 mb-4">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 pointer-events-auto">
+          <div className="bg-[#111827] border border-slate-700/80 rounded-xl p-5 sm:p-6 w-full max-w-lg shadow-2xl">
+            <h3 className="text-sm sm:text-base font-bold text-white mb-1">Video Kaynağını Belirleyin</h3>
+            <p className="text-[11px] sm:text-xs text-slate-400 mb-3.5">
               YouTube bağlantısı yapıştırın veya doğrudan bir video bağlantısı (MP4) ekleyin.
             </p>
 
-            <div className="flex items-center gap-2 mb-4 p-1 bg-slate-900 rounded-lg">
+            <div className="flex items-center gap-1.5 mb-3.5 p-1 bg-slate-900 rounded-lg">
               <button
                 type="button"
                 onClick={() => setSourceTypeSelect('youtube')}
@@ -850,8 +871,8 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               </button>
             </div>
 
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+            <div className="mb-3.5">
+              <label className="block text-[11px] sm:text-xs font-medium text-slate-300 mb-1">
                 {sourceTypeSelect === 'youtube'
                   ? 'YouTube Video Bağlantısı'
                   : 'Doğrudan Video Akış URL (MP4 / WebM)'}
@@ -865,13 +886,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                 }
                 value={sourceInput}
                 onChange={(e) => setSourceInput(e.target.value)}
-                className="w-full px-3.5 py-2 text-xs bg-slate-950 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-rose-500 font-mono"
+                className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-rose-500 font-mono"
               />
             </div>
 
-            {/* Quick Test Presets */}
-            <div className="mb-5">
-              <span className="text-[11px] font-medium text-slate-400 block mb-2">
+            <div className="mb-4">
+              <span className="text-[11px] font-medium text-slate-400 block mb-1.5">
                 Hızlı Örnek Videolar:
               </span>
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -884,10 +904,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                       'Big Buck Bunny (4K 60fps)'
                     )
                   }
-                  className="px-2.5 py-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
+                  className="p-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
                 >
-                  <span className="font-semibold block text-white truncate">Big Buck Bunny</span>
-                  <span className="text-[10px] text-slate-500">YouTube 4K Test</span>
+                  <span className="font-semibold block text-white truncate text-[11px]">Big Buck Bunny</span>
+                  <span className="text-[9px] text-slate-500">YouTube 4K Test</span>
                 </button>
 
                 <button
@@ -896,13 +916,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                     loadPreset(
                       'youtube',
                       'https://www.youtube.com/watch?v=zSWdZVtXT7E',
-                      'Interstellar Resmi Fragman'
+                      'Interstellar Fragman'
                     )
                   }
-                  className="px-2.5 py-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
+                  className="p-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
                 >
-                  <span className="font-semibold block text-white truncate">Interstellar Fragman</span>
-                  <span className="text-[10px] text-slate-500">YouTube Fragman</span>
+                  <span className="font-semibold block text-white truncate text-[11px]">Interstellar</span>
+                  <span className="text-[9px] text-slate-500">YouTube Fragman</span>
                 </button>
 
                 <button
@@ -914,10 +934,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                       'Tears of Steel (1080p Sci-Fi)'
                     )
                   }
-                  className="px-2.5 py-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
+                  className="p-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
                 >
-                  <span className="font-semibold block text-white truncate">Tears of Steel</span>
-                  <span className="text-[10px] text-slate-500">Direct MP4 1080p</span>
+                  <span className="font-semibold block text-white truncate text-[11px]">Tears of Steel</span>
+                  <span className="text-[9px] text-slate-500">Direct MP4 1080p</span>
                 </button>
 
                 <button
@@ -929,19 +949,19 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                       'Elephants Dream'
                     )
                   }
-                  className="px-2.5 py-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
+                  className="p-2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 transition-colors"
                 >
-                  <span className="font-semibold block text-white truncate">Elephants Dream</span>
-                  <span className="text-[10px] text-slate-500">Direct MP4 Test</span>
+                  <span className="font-semibold block text-white truncate text-[11px]">Elephants Dream</span>
+                  <span className="text-[9px] text-slate-500">Direct MP4 Test</span>
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-800">
               <button
                 type="button"
                 onClick={() => setShowSourceModal(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white transition-colors"
+                className="px-3.5 py-1.5 text-xs font-medium text-slate-400 hover:text-white transition-colors"
               >
                 İptal
               </button>
@@ -949,7 +969,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                 type="button"
                 onClick={handleApplySource}
                 disabled={!sourceInput.trim()}
-                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-500 disabled:opacity-50 transition-colors"
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-500 disabled:opacity-50 transition-colors"
               >
                 Videoyu Yükle
               </button>

@@ -9,6 +9,7 @@ interface ChatPanelProps {
   currentUserId: string;
   isEncrypted: boolean;
   onTriggerReaction: (emoji: string) => void;
+  onClose?: () => void;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -18,6 +19,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   currentUserId,
   isEncrypted,
   onTriggerReaction,
+  onClose,
 }) => {
   const [inputText, setInputText] = useState('');
   const [activeSubTab, setActiveSubTab] = useState<'chat' | 'users'>('chat');
@@ -46,19 +48,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setActiveSubTab('chat')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-semibold transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold transition-colors ${
               activeSubTab === 'chat'
                 ? 'bg-rose-600 text-white shadow-xs'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>Canlı Sohbet</span>
+            <span>Sohbet</span>
           </button>
 
           <button
             onClick={() => setActiveSubTab('users')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-semibold transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold transition-colors ${
               activeSubTab === 'users'
                 ? 'bg-rose-600 text-white shadow-xs'
                 : 'text-slate-400 hover:text-white'
@@ -69,8 +71,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </button>
         </div>
 
-        {/* E2EE indicator */}
-        <div className="flex items-center gap-1 text-[11px]">
+        {/* E2EE indicator & Close Button */}
+        <div className="flex items-center gap-2 text-[11px]">
           {isEncrypted ? (
             <span className="flex items-center gap-1 text-emerald-400 font-mono" title="AES-GCM Uçtan Uca Şifreli">
               <ShieldCheck className="w-3.5 h-3.5" />
@@ -81,6 +83,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               <Lock className="w-3 h-3" />
               Genel
             </span>
+          )}
+
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors ml-1"
+              title="Sohbeti Kapat"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           )}
         </div>
       </div>

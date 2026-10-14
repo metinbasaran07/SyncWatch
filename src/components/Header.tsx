@@ -1,5 +1,5 @@
 import React from 'react';
-import { Film, Share2, Lock, ShieldCheck, Users, Copy, Check } from 'lucide-react';
+import { Film, Share2, Lock, ShieldCheck, Users, MessageSquare, Sparkles, Settings } from 'lucide-react';
 
 interface HeaderProps {
   roomId: string;
@@ -9,7 +9,9 @@ interface HeaderProps {
   activeTab: 'cinema' | 'discovery' | 'settings';
   setActiveTab: (tab: 'cinema' | 'discovery' | 'settings') => void;
   onShareRoom: () => void;
-  isCopied: boolean;
+  isCopied?: boolean;
+  isChatOpen: boolean;
+  onToggleChat: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,17 +22,18 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   onShareRoom,
-  isCopied,
+  isChatOpen,
+  onToggleChat,
 }) => {
   return (
-    <header className="flex items-center justify-between gap-8 px-6 py-3.5 bg-[#0e1424] border-b border-slate-800/80 sticky top-0 z-40">
+    <header className="flex items-center justify-between gap-3 sm:gap-6 px-3 py-2.5 sm:px-6 sm:py-3 bg-[#0e1424] border-b border-slate-800/80 sticky top-0 z-40">
       {/* Zone 1: Single text element Brand Zone */}
-      <div className="flex items-center gap-3 shrink-0">
-        <a href="/" className="flex items-center gap-2.5 group">
-          <div className="w-8 h-8 rounded-lg bg-rose-600 flex items-center justify-center text-white shadow-sm shadow-rose-950/40 group-hover:bg-rose-500 transition-colors">
-            <Film className="w-4 h-4" />
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <a href="/" className="flex items-center gap-2 group">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-600 flex items-center justify-center text-white shadow-sm shadow-rose-950/40 group-hover:bg-rose-500 transition-colors">
+            <Film className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </div>
-          <span className="text-lg font-bold tracking-tight text-white whitespace-nowrap">
+          <span className="text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap">
             CineSync
           </span>
         </a>
@@ -49,69 +52,78 @@ export const Header: React.FC<HeaderProps> = ({
           ) : (
             <span className="inline-flex items-center gap-1 text-slate-500 text-[11px]">
               <Lock className="w-3 h-3 text-slate-500" />
-              Açık Oda
+              Açık
             </span>
           )}
         </div>
       </div>
 
-      {/* Zone 2: 4-5 single-line clean navigation tabs */}
-      <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-300">
+      {/* Zone 2: Navigation Links (Compact on Mobile, Full on Desktop) */}
+      <nav className="flex items-center gap-2 sm:gap-6 text-xs sm:text-sm font-medium text-slate-300">
         <button
           onClick={() => setActiveTab('cinema')}
-          className={`whitespace-nowrap shrink-0 transition-colors py-1 ${
+          className={`whitespace-nowrap shrink-0 transition-colors py-1 px-1.5 sm:px-0 ${
             activeTab === 'cinema'
               ? 'text-white border-b-2 border-rose-500 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          Sinema Sahnesi
+          <span className="hidden sm:inline">Sinema Sahnesi</span>
+          <span className="sm:hidden">Sinema</span>
         </button>
         <button
           onClick={() => setActiveTab('discovery')}
-          className={`whitespace-nowrap shrink-0 transition-colors py-1 ${
+          className={`whitespace-nowrap shrink-0 transition-colors py-1 px-1.5 sm:px-0 ${
             activeTab === 'discovery'
               ? 'text-white border-b-2 border-rose-500 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          Film Keşfet & AI
+          <span className="hidden sm:inline">Film Keşfet & AI</span>
+          <span className="sm:hidden">Keşfet</span>
         </button>
         <button
           onClick={() => setActiveTab('settings')}
-          className={`whitespace-nowrap shrink-0 transition-colors py-1 ${
+          className={`whitespace-nowrap shrink-0 transition-colors py-1 px-1.5 sm:px-0 ${
             activeTab === 'settings'
               ? 'text-white border-b-2 border-rose-500 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          Oda & Şifreleme
+          <span className="hidden sm:inline">Oda & Şifreleme</span>
+          <span className="sm:hidden">Ayarlar</span>
         </button>
       </nav>
 
-      {/* Zone 3: 1 primary action button */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900 border border-slate-800 text-xs text-slate-400">
+      {/* Zone 3: Chat Toggle & Share Button */}
+      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        {/* Chat Toggle Button (Canlı sohbet kısmı kapatılabilsin) */}
+        {activeTab === 'cinema' && (
+          <button
+            onClick={onToggleChat}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors border ${
+              isChatOpen
+                ? 'bg-rose-900/30 border-rose-700/60 text-rose-300 hover:bg-rose-900/50'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+            title={isChatOpen ? 'Sohbeti Gizle' : 'Sohbeti Aç'}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{isChatOpen ? 'Sohbeti Kapat' : 'Sohbeti Aç'}</span>
+          </button>
+        )}
+
+        <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-900 border border-slate-800 text-xs text-slate-400">
           <Users className="w-3.5 h-3.5 text-slate-400" />
           <span className="font-mono tabular-nums text-slate-200">{participantCount}</span>
-          <span className="hidden sm:inline">kişi</span>
         </div>
 
         <button
           onClick={onShareRoom}
-          className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-500 active:scale-95 transition-all shadow-sm shadow-rose-950/30 whitespace-nowrap shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-500 active:scale-95 transition-all shadow-sm shadow-rose-950/30 whitespace-nowrap shrink-0"
         >
-          {isCopied ? (
-            <>
-              <Check className="w-3.5 h-3.5" />
-              <span>Kopyalandı!</span>
-            </>
-          ) : (
-            <>
-              <Share2 className="w-3.5 h-3.5" />
-              <span>Odayı Paylaş</span>
-            </>
-          )}
+          <Share2 className="w-3.5 h-3.5" />
+          <span>Paylaş</span>
         </button>
       </div>
     </header>

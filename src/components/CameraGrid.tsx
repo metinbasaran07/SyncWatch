@@ -333,64 +333,70 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
       )}
 
       {/* Control Strip */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/80">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={onToggleCamera}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-colors ${
               hasCamera
                 ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
             }`}
           >
             {hasCamera ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
-            <span>{hasCamera ? 'Kamerayı Kapat' : 'Kamerayı Aç'}</span>
+            <span>{hasCamera ? 'Kamera Açık' : 'Kamera Aç'}</span>
           </button>
 
           <button
             onClick={onToggleMic}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-colors ${
               hasMic
                 ? 'bg-slate-800 text-white hover:bg-slate-700'
                 : 'bg-rose-900/40 text-rose-300 border border-rose-800 hover:bg-rose-900/60'
             }`}
           >
             {hasMic ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-            <span>{hasMic ? 'Mikrofonu Kapat' : 'Mikrofonu Aç'}</span>
+            <span>{hasMic ? 'Mikrofon Açık' : 'Mikrofon Aç'}</span>
           </button>
 
           <button
             onClick={() => onTogglePushToTalkMode(!isPushToTalkMode)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] sm:text-xs font-medium border transition-colors ${
               isPushToTalkMode
                 ? 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white'
                 : 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
             }`}
             title="Bas-Konuş ve Açık Mikrofon arasında geçiş yap"
           >
-            <Radio className="w-3.5 h-3.5 text-rose-500" />
-            <span>{isPushToTalkMode ? 'Mod: Bas-Konuş' : 'Mod: Açık Mikrofon'}</span>
+            <Radio className="w-3 h-3 text-rose-500" />
+            <span>{isPushToTalkMode ? 'Bas-Konuş' : 'Açık Mic'}</span>
           </button>
         </div>
 
         {isPushToTalkMode && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto mt-1 sm:mt-0">
             <button
               onMouseDown={() => onPushToTalkTrigger(true)}
               onMouseUp={() => onPushToTalkTrigger(false)}
               onMouseLeave={() => onPushToTalkTrigger(false)}
-              onTouchStart={() => onPushToTalkTrigger(true)}
-              onTouchEnd={() => onPushToTalkTrigger(false)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all select-none cursor-pointer active:scale-95 ${
+              onTouchStart={(e) => {
+                e.preventDefault();
+                onPushToTalkTrigger(true);
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                onPushToTalkTrigger(false);
+              }}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all select-none cursor-pointer active:scale-95 touch-none ${
                 isPushToTalkActive
                   ? 'bg-rose-600 text-white shadow-lg shadow-rose-900/60 ring-2 ring-rose-400'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
               }`}
             >
-              <Mic className={`w-4 h-4 ${isPushToTalkActive ? 'animate-bounce' : ''}`} />
+              <Mic className={`w-3.5 h-3.5 ${isPushToTalkActive ? 'animate-bounce' : ''}`} />
               <span>{isPushToTalkActive ? 'KONUŞULUYOR (Bırak)' : 'Basılı Tut ve Konuş (PTT)'}</span>
             </button>
-            <span className="hidden sm:inline text-[11px] text-slate-400 font-mono">
+            <span className="hidden sm:inline text-[10px] text-slate-400 font-mono">
               [Space / V]
             </span>
           </div>

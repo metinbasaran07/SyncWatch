@@ -185,6 +185,26 @@ wss.on('connection', (ws: WebSocket) => {
           break;
         }
 
+        case 'ping': {
+          ws.send(JSON.stringify({ type: 'pong' }));
+          break;
+        }
+
+        case 'room:password_update': {
+          const { roomId, data } = msg;
+          const room = rooms.get(roomId);
+          if (room) {
+            room.password = data?.password || '';
+            room.hasPassword = Boolean(data?.password);
+            broadcastToRoom(roomId, {
+              type: 'room:password_update',
+              roomId,
+              data: { password: room.password },
+            });
+          }
+          break;
+        }
+
         case 'vote:update': {
           const { roomId, data: voteData } = msg;
           const room = rooms.get(roomId);
@@ -213,32 +233,43 @@ wss.on('connection', (ws: WebSocket) => {
       const { roomId, userId, userName } = client;
       clients.delete(ws);
 
-      const room = rooms.get(roomId);
-      if (room) {
-        room.users = room.users.filter((u: any) => u.id !== userId);
-        // If host left, designate next user as host
-        if (room.hostId === userId && room.users.length > 0) {
-          room.hostId = room.users[0].id;
-          room.users[0].isHost = true;
+      // 15 second grace period for mobile reconnection / page refresh
+      setTimeout(() => {
+        let isStillConnected = false;
+        for (const c of clients.values()) {
+          if (c.userId === userId && c.roomId === roomId) {
+            isStillConnected = true;
+            break;
+          }
         }
 
-        broadcastToRoom(roomId, {
-          type: 'user:left',
-          roomId,
-          userId,
-          userName,
-          remainingUsers: room.users,
-        });
-
-        // Clean up empty room after 10 minutes
-        if (room.users.length === 0) {
-          setTimeout(() => {
-            if (rooms.get(roomId)?.users.length === 0) {
-              rooms.delete(roomId);
+        if (!isStillConnected) {
+          const room = rooms.get(roomId);
+          if (room) {
+            room.users = room.users.filter((u: any) => u.id !== userId);
+            if (room.hostId === userId && room.users.length > 0) {
+              room.hostId = room.users[0].id;
+              room.users[0].isHost = true;
             }
-          }, 600000);
+
+            broadcastToRoom(roomId, {
+              type: 'user:left',
+              roomId,
+              userId,
+              userName,
+              remainingUsers: room.users,
+            });
+
+            if (room.users.length === 0) {
+              setTimeout(() => {
+                if (rooms.get(roomId)?.users.length === 0) {
+                  rooms.delete(roomId);
+                }
+              }, 600000);
+            }
+          }
         }
-      }
+      }, 15000);
     }
   });
 });
