@@ -286,6 +286,18 @@ function touchUser(
         allUsers,
       },
     });
+
+    dispatchRoomEvent(normId, {
+      type: 'room:users_updated',
+      senderId: user.id,
+      data: allUsers,
+    });
+
+    dispatchRoomEvent(normId, {
+      type: 'room:state',
+      senderId: user.id,
+      data: getRoomSnapshot(room),
+    });
   }
 
   return userRecord;
@@ -480,18 +492,18 @@ app.get('/api/room/:roomId', (req, res) => {
 });
 
 // Unified HTTP Signaling & Polling endpoint (used across devices, proxies, Cloud Run and Vercel)
-app.post('/api/signaling', (req, res) => {
-  const {
-    roomId,
-    userId,
-    userName,
-    userColor,
-    isHost,
-    action,
-    message,
-    fetchSince,
-    userState,
-  } = req.body;
+app.all('/api/signaling', (req, res) => {
+  const query = req.method === 'GET' ? req.query : req.body || {};
+  const body = req.body || {};
+  const roomId = (query.roomId || body.roomId || '').toString();
+  const userId = (query.userId || body.userId || '').toString();
+  const userName = (query.userName || body.userName || '').toString();
+  const userColor = (query.userColor || body.userColor || '').toString();
+  const isHost = query.isHost === true || query.isHost === 'true' || body.isHost === true;
+  const action = (query.action || body.action || (body.type === 'join-room' ? 'join' : '')).toString();
+  const message = body.message || (body.type && body.type !== 'join-room' ? body : undefined);
+  const fetchSince = query.fetchSince || query.lastIndex || body.fetchSince;
+  const userState = body.userState;
 
   if (!roomId) {
     return res.status(400).json({ error: 'roomId required' });
@@ -501,13 +513,13 @@ app.post('/api/signaling', (req, res) => {
   const room = getOrCreateRoom(normId, userName, userId);
 
   // Keep participant registered and active
-  if (userId && userName) {
+  if (userId && (userName || action === 'join' || body.type === 'join-room')) {
     touchUser(normId, {
       id: userId,
-      name: userName,
-      avatarColor: userColor,
+      name: userName || (body.userName) || 'Kullanıcı',
+      avatarColor: userColor || (body.userColor) || '#6366f1',
       isHost,
-    }, action === 'join');
+    }, true);
   } else if (userId) {
     const existing = room.users.get(userId);
     if (existing) {
@@ -531,21 +543,12 @@ app.post('/api/signaling', (req, res) => {
 
   // If a new outgoing message is sent from this client:
   if (message) {
-    if (message.type === 'join-room') {
-      touchUser(normId, {
-        id: message.userId,
-        name: message.userName,
-        avatarColor: message.userColor,
-        isHost: message.isHost,
-      }, true);
-    } else {
-      dispatchRoomEvent(normId, {
-        type: message.type,
-        senderId: message.senderId || userId,
-        targetId: message.targetId,
-        data: message.data !== undefined ? message.data : message,
-      });
-    }
+    dispatchRoomEvent(normId, {
+      type: message.type,
+      senderId: message.senderId || userId,
+      targetId: message.targetId,
+      data: message.data !== undefined ? message.data : message,
+    });
   }
 
   // Filter events for this user since the given timestamp
@@ -556,10 +559,15 @@ app.post('/api/signaling', (req, res) => {
     return true;
   });
 
+  const snapshot = getRoomSnapshot(room);
+
   res.json({
     success: true,
-    room: getRoomSnapshot(room),
+    room: snapshot,
+    roomState: snapshot,
+    users: snapshot.users,
     messages: newEvents,
+    events: newEvents,
     now: Date.now(),
   });
 });
