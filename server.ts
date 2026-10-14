@@ -19,10 +19,12 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (request, socket, head) => {
   try {
     const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
-    if (url.pathname === '/ws') {
+    if (url.pathname === '/ws' || url.pathname.startsWith('/ws')) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
+    } else {
+      socket.destroy();
     }
   } catch (e) {
     socket.destroy();
@@ -41,200 +43,375 @@ const ai = new GoogleGenAI({
   },
 });
 
-// In-Memory Room & Peer Registry
-interface ConnectedClient {
-  ws: WebSocket;
-  userId: string;
-  roomId: string;
-  userName: string;
+// Room & Participant Hub interfaces
+interface RoomUserRecord {
+  id: string;
+  name: string;
+  avatarColor: string;
+  isHost: boolean;
+  hasCamera: boolean;
+  hasMic: boolean;
+  isSpeaking: boolean;
+  isSharingScreen: boolean;
+  joinedAt: number;
+  lastSeen: number;
 }
 
-const clients = new Map<WebSocket, ConnectedClient>();
-const rooms = new Map<string, any>();
+interface RoomEvent {
+  id: string;
+  type: string;
+  roomId: string;
+  senderId?: string;
+  targetId?: string;
+  data: any;
+  timestamp: number;
+}
 
-// Helper to broadcast to room
-function broadcastToRoom(roomId: string, message: any, excludeWs?: WebSocket) {
-  const payload = JSON.stringify(message);
-  for (const [ws, client] of clients.entries()) {
-    if (client.roomId === roomId && ws !== excludeWs && ws.readyState === WebSocket.OPEN) {
-      ws.send(payload);
+interface RoomData {
+  id: string;
+  name: string;
+  hostId: string;
+  password?: string;
+  hasPassword?: boolean;
+  video: {
+    sourceType: 'youtube' | 'direct' | 'screenshare';
+    sourceUrl: string;
+    sourceTitle: string;
+    isPlaying: boolean;
+    currentTime: number;
+    duration: number;
+    lastUpdated: number;
+    updatedBy: string;
+    playbackRate: number;
+  };
+  users: Map<string, RoomUserRecord>;
+  events: RoomEvent[];
+  activeVote?: any;
+}
+
+const rooms = new Map<string, RoomData>();
+const wsClientMap = new Map<WebSocket, { userId: string; roomId: string; userName: string }>();
+
+function getOrCreateRoom(roomId: string, hostName?: string, hostId?: string): RoomData {
+  const normId = roomId.trim().toLowerCase();
+  if (!rooms.has(normId)) {
+    rooms.set(normId, {
+      id: normId,
+      name: hostName ? `${hostName}'in Sinema Odası` : 'CineSync Sinema Odası',
+      hostId: hostId || '',
+      password: '',
+      hasPassword: false,
+      video: {
+        sourceType: 'youtube',
+        sourceUrl: '',
+        sourceTitle: 'İçerik Seçilmedi',
+        isPlaying: false,
+        currentTime: 0,
+        duration: 0,
+        lastUpdated: Date.now(),
+        updatedBy: hostName || 'Sistem',
+        playbackRate: 1,
+      },
+      users: new Map(),
+      events: [],
+    });
+  }
+  return rooms.get(normId)!;
+}
+
+function getRoomSnapshot(room: RoomData) {
+  return {
+    id: room.id,
+    name: room.name,
+    hostId: room.hostId,
+    password: room.password,
+    hasPassword: Boolean(room.password),
+    video: room.video,
+    users: Array.from(room.users.values()).map(u => ({
+      id: u.id,
+      name: u.name,
+      avatarColor: u.avatarColor,
+      isHost: u.isHost,
+      hasCamera: u.hasCamera,
+      hasMic: u.hasMic,
+      isSpeaking: u.isSpeaking,
+      isSharingScreen: u.isSharingScreen,
+      joinedAt: u.joinedAt,
+    })),
+    activeVote: room.activeVote,
+  };
+}
+
+// Broadcasts an event to all WebSocket clients for a room
+function broadcastToWebSocketClients(roomId: string, event: RoomEvent, excludeWs?: WebSocket) {
+  const payload = JSON.stringify(event);
+  const normId = roomId.trim().toLowerCase();
+  for (const [ws, client] of wsClientMap.entries()) {
+    if (client.roomId === normId && ws !== excludeWs && ws.readyState === WebSocket.OPEN) {
+      if (!event.targetId || event.targetId === client.userId) {
+        ws.send(payload);
+      }
     }
   }
 }
+
+// Dispatches an event to the unified room: stores it in room.events, updates state, and broadcasts
+function dispatchRoomEvent(
+  roomId: string,
+  event: { type: string; senderId?: string; targetId?: string; data?: any },
+  excludeWs?: WebSocket
+): RoomEvent {
+  const normId = roomId.trim().toLowerCase();
+  const room = getOrCreateRoom(normId);
+
+  const roomEvent: RoomEvent = {
+    id: `ev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    type: event.type,
+    roomId: normId,
+    senderId: event.senderId,
+    targetId: event.targetId,
+    data: event.data !== undefined ? event.data : {},
+    timestamp: Date.now(),
+  };
+
+  // State mutations based on event type
+  if (event.type === 'sync:video' && event.data) {
+    room.video = {
+      ...room.video,
+      ...event.data,
+      lastUpdated: Date.now(),
+    };
+  } else if (event.type === 'room:password_update' && event.data) {
+    room.password = event.data.password || '';
+    room.hasPassword = Boolean(room.password);
+  } else if (event.type === 'vote:update' && event.data) {
+    room.activeVote = event.data;
+  } else if (event.type === 'user:state_update' && event.senderId && event.data) {
+    const user = room.users.get(event.senderId);
+    if (user) {
+      Object.assign(user, event.data);
+      user.lastSeen = Date.now();
+    }
+  }
+
+  // Push to room events buffer (keep last 300)
+  room.events.push(roomEvent);
+  if (room.events.length > 300) {
+    room.events.shift();
+  }
+
+  // Broadcast to all active WebSocket connections for this room
+  broadcastToWebSocketClients(normId, roomEvent, excludeWs);
+
+  return roomEvent;
+}
+
+// Registers or updates user activity in room
+function touchUser(
+  roomId: string,
+  user: {
+    id: string;
+    name: string;
+    avatarColor?: string;
+    isHost?: boolean;
+    hasCamera?: boolean;
+    hasMic?: boolean;
+    isSpeaking?: boolean;
+    isSharingScreen?: boolean;
+  },
+  triggerJoinedEvent = true
+) {
+  const normId = roomId.trim().toLowerCase();
+  const room = getOrCreateRoom(normId, user.name, user.id);
+
+  let userRecord = room.users.get(user.id);
+  const isNew = !userRecord;
+
+  if (!userRecord) {
+    const isFirstUser = room.users.size === 0;
+    userRecord = {
+      id: user.id,
+      name: user.name || 'Misafir',
+      avatarColor: user.avatarColor || '#e11d48',
+      isHost: user.isHost ?? isFirstUser,
+      hasCamera: Boolean(user.hasCamera),
+      hasMic: user.hasMic ?? true,
+      isSpeaking: Boolean(user.isSpeaking),
+      isSharingScreen: Boolean(user.isSharingScreen),
+      joinedAt: Date.now(),
+      lastSeen: Date.now(),
+    };
+    room.users.set(user.id, userRecord);
+    if (!room.hostId || isFirstUser) {
+      room.hostId = user.id;
+    }
+  } else {
+    userRecord.name = user.name || userRecord.name;
+    if (user.avatarColor) userRecord.avatarColor = user.avatarColor;
+    if (user.hasCamera !== undefined) userRecord.hasCamera = user.hasCamera;
+    if (user.hasMic !== undefined) userRecord.hasMic = user.hasMic;
+    if (user.isSpeaking !== undefined) userRecord.isSpeaking = user.isSpeaking;
+    if (user.isSharingScreen !== undefined) userRecord.isSharingScreen = user.isSharingScreen;
+    userRecord.lastSeen = Date.now();
+  }
+
+  if (isNew && triggerJoinedEvent) {
+    const allUsers = Array.from(room.users.values()).map(u => ({
+      id: u.id,
+      name: u.name,
+      avatarColor: u.avatarColor,
+      isHost: u.isHost,
+      hasCamera: u.hasCamera,
+      hasMic: u.hasMic,
+      isSpeaking: u.isSpeaking,
+      isSharingScreen: u.isSharingScreen,
+      joinedAt: u.joinedAt,
+    }));
+
+    dispatchRoomEvent(normId, {
+      type: 'user:joined',
+      senderId: user.id,
+      data: {
+        user: {
+          id: userRecord.id,
+          name: userRecord.name,
+          avatarColor: userRecord.avatarColor,
+          isHost: userRecord.isHost,
+          hasCamera: userRecord.hasCamera,
+          hasMic: userRecord.hasMic,
+          isSpeaking: userRecord.isSpeaking,
+          isSharingScreen: userRecord.isSharingScreen,
+          joinedAt: userRecord.joinedAt,
+        },
+        allUsers,
+      },
+    });
+  }
+
+  return userRecord;
+}
+
+// Periodically clean up stale users who haven't pinged in 40 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of rooms.entries()) {
+    let usersChanged = false;
+    for (const [userId, user] of room.users.entries()) {
+      // Check if user has an active WebSocket
+      let hasActiveWs = false;
+      for (const [ws, client] of wsClientMap.entries()) {
+        if (client.userId === userId && ws.readyState === WebSocket.OPEN) {
+          hasActiveWs = true;
+          user.lastSeen = now; // Keep alive as long as WS is open
+          break;
+        }
+      }
+
+      if (!hasActiveWs && now - user.lastSeen > 40000) {
+        room.users.delete(userId);
+        usersChanged = true;
+
+        if (room.hostId === userId && room.users.size > 0) {
+          const firstLeft = room.users.values().next().value;
+          if (firstLeft) {
+            room.hostId = firstLeft.id;
+            firstLeft.isHost = true;
+          }
+        }
+
+        const remainingUsers = Array.from(room.users.values()).map(u => ({
+          id: u.id,
+          name: u.name,
+          avatarColor: u.avatarColor,
+          isHost: u.isHost,
+          hasCamera: u.hasCamera,
+          hasMic: u.hasMic,
+          isSpeaking: u.isSpeaking,
+          isSharingScreen: u.isSharingScreen,
+          joinedAt: u.joinedAt,
+        }));
+
+        dispatchRoomEvent(roomId, {
+          type: 'user:left',
+          senderId: userId,
+          data: {
+            userId,
+            userName: user.name,
+            remainingUsers,
+          },
+        });
+      }
+    }
+
+    if (usersChanged && room.users.size === 0) {
+      setTimeout(() => {
+        if (rooms.get(roomId)?.users.size === 0) {
+          rooms.delete(roomId);
+        }
+      }, 600000);
+    }
+  }
+}, 10000);
 
 // WebSocket Connection Management
 wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (data: string) => {
     try {
       const msg = JSON.parse(data.toString());
+      const normRoomId = (msg.roomId || '').trim().toLowerCase();
 
       switch (msg.type) {
         case 'join-room': {
-          const { roomId, userId, userName, userColor, isHost } = msg;
-          clients.set(ws, { ws, userId, roomId, userName });
+          const { userId, userName, userColor, isHost } = msg;
+          wsClientMap.set(ws, { userId, roomId: normRoomId, userName });
 
-          // Initialize room if not exists
-          if (!rooms.has(roomId)) {
-            rooms.set(roomId, {
-              id: roomId,
-              name: `${userName}'in Sinema Odası`,
-              hostId: userId,
-              video: {
-                sourceType: 'youtube',
-                sourceUrl: '',
-                sourceTitle: 'İçerik Seçilmedi',
-                isPlaying: false,
-                currentTime: 0,
-                duration: 0,
-                lastUpdated: Date.now(),
-                updatedBy: userName,
-                playbackRate: 1,
-              },
-              users: [],
-            });
-          }
+          touchUser(normRoomId, { id: userId, name: userName, avatarColor: userColor, isHost });
+          const room = getOrCreateRoom(normRoomId);
 
-          const room = rooms.get(roomId);
-          const existingUserIdx = room.users.findIndex((u: any) => u.id === userId);
-          const newUser = {
-            id: userId,
-            name: userName,
-            avatarColor: userColor || '#e11d48',
-            isHost: isHost || room.users.length === 0,
-            hasCamera: false,
-            hasMic: false,
-            isSpeaking: false,
-            isSharingScreen: false,
-            joinedAt: Date.now(),
-          };
-
-          if (existingUserIdx >= 0) {
-            room.users[existingUserIdx] = newUser;
-          } else {
-            room.users.push(newUser);
-          }
-
-          // Send full current room state to joined user
+          // Send complete current room snapshot to the joining client
           ws.send(JSON.stringify({
+            id: `ev_${Date.now()}_state`,
             type: 'room:state',
-            roomId,
-            data: room,
+            roomId: normRoomId,
+            data: getRoomSnapshot(room),
+            timestamp: Date.now(),
           }));
-
-          // Notify other participants in the room
-          broadcastToRoom(roomId, {
-            type: 'user:joined',
-            roomId,
-            data: { user: newUser, allUsers: room.users },
-          }, ws);
           break;
         }
 
-        case 'sync:video': {
-          const { roomId, data: videoState } = msg;
-          const room = rooms.get(roomId);
-          if (room) {
-            room.video = {
-              ...room.video,
-              ...videoState,
-              lastUpdated: Date.now(),
-            };
-            // Broadcast synchronization to all other peers
-            broadcastToRoom(roomId, {
-              type: 'sync:video',
-              roomId,
-              senderId: msg.senderId,
-              data: room.video,
-            }, ws);
-          }
-          break;
-        }
-
-        case 'user:state_update': {
-          const { roomId, userId, data: userUpdate } = msg;
-          const room = rooms.get(roomId);
-          if (room) {
-            const user = room.users.find((u: any) => u.id === userId);
-            if (user) {
-              Object.assign(user, userUpdate);
-              broadcastToRoom(roomId, {
-                type: 'user:state_update',
-                roomId,
-                userId,
-                data: userUpdate,
-              }, ws);
-            }
-          }
-          break;
-        }
-
-        // WebRTC Signaling: Offer, Answer, ICE Candidate
-        case 'signal:offer':
-        case 'signal:answer':
-        case 'signal:candidate': {
-          const { roomId, targetId } = msg;
-          // Route specifically to target peer if specified
-          if (targetId) {
-            for (const [targetWs, client] of clients.entries()) {
-              if (client.userId === targetId && targetWs.readyState === WebSocket.OPEN) {
-                targetWs.send(JSON.stringify(msg));
-                break;
-              }
-            }
-          } else {
-            broadcastToRoom(roomId, msg, ws);
-          }
-          break;
-        }
-
-        case 'chat:message': {
-          const { roomId } = msg;
-          broadcastToRoom(roomId, msg);
-          break;
-        }
-
-        case 'chat:reaction': {
-          const { roomId } = msg;
-          broadcastToRoom(roomId, msg);
+        case 'get-room-state': {
+          const room = getOrCreateRoom(normRoomId);
+          ws.send(JSON.stringify({
+            id: `ev_${Date.now()}_state`,
+            type: 'room:state',
+            roomId: normRoomId,
+            data: getRoomSnapshot(room),
+            timestamp: Date.now(),
+          }));
           break;
         }
 
         case 'ping': {
-          ws.send(JSON.stringify({ type: 'pong' }));
-          break;
-        }
-
-        case 'room:password_update': {
-          const { roomId, data } = msg;
-          const room = rooms.get(roomId);
-          if (room) {
-            room.password = data?.password || '';
-            room.hasPassword = Boolean(data?.password);
-            broadcastToRoom(roomId, {
-              type: 'room:password_update',
-              roomId,
-              data: { password: room.password },
-            });
+          const client = wsClientMap.get(ws);
+          if (client) {
+            const room = rooms.get(client.roomId);
+            const user = room?.users.get(client.userId);
+            if (user) user.lastSeen = Date.now();
           }
+          ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
           break;
         }
 
-        case 'vote:update': {
-          const { roomId, data: voteData } = msg;
-          const room = rooms.get(roomId);
-          if (room) {
-            room.activeVote = voteData;
-            broadcastToRoom(roomId, {
-              type: 'vote:update',
-              roomId,
-              data: voteData,
-            });
-          }
+        default: {
+          // All other events: sync:video, chat:message, signal:*, user:state_update, etc.
+          dispatchRoomEvent(normRoomId, {
+            type: msg.type,
+            senderId: msg.senderId || msg.userId,
+            targetId: msg.targetId,
+            data: msg.data !== undefined ? msg.data : msg,
+          }, ws);
           break;
         }
-
-        default:
-          break;
       }
     } catch (err) {
       console.error('WebSocket message parsing error:', err);
@@ -242,45 +419,44 @@ wss.on('connection', (ws: WebSocket) => {
   });
 
   ws.on('close', () => {
-    const client = clients.get(ws);
+    const client = wsClientMap.get(ws);
     if (client) {
-      const { roomId, userId, userName } = client;
-      clients.delete(ws);
-
-      // 15 second grace period for mobile reconnection / page refresh
+      wsClientMap.delete(ws);
+      // Give a 15 second grace period before cleaning up in case client reconnects or switches transport
       setTimeout(() => {
-        let isStillConnected = false;
-        for (const c of clients.values()) {
-          if (c.userId === userId && c.roomId === roomId) {
-            isStillConnected = true;
+        let isReconnected = false;
+        for (const c of wsClientMap.values()) {
+          if (c.userId === client.userId && c.roomId === client.roomId) {
+            isReconnected = true;
             break;
           }
         }
-
-        if (!isStillConnected) {
-          const room = rooms.get(roomId);
-          if (room) {
-            room.users = room.users.filter((u: any) => u.id !== userId);
-            if (room.hostId === userId && room.users.length > 0) {
-              room.hostId = room.users[0].id;
-              room.users[0].isHost = true;
-            }
-
-            broadcastToRoom(roomId, {
+        if (!isReconnected) {
+          const room = rooms.get(client.roomId);
+          const user = room?.users.get(client.userId);
+          // If no recent HTTP poll either, remove
+          if (user && Date.now() - user.lastSeen > 20000) {
+            room?.users.delete(client.userId);
+            const remainingUsers = Array.from(room?.users.values() || []).map(u => ({
+              id: u.id,
+              name: u.name,
+              avatarColor: u.avatarColor,
+              isHost: u.isHost,
+              hasCamera: u.hasCamera,
+              hasMic: u.hasMic,
+              isSpeaking: u.isSpeaking,
+              isSharingScreen: u.isSharingScreen,
+              joinedAt: u.joinedAt,
+            }));
+            dispatchRoomEvent(client.roomId, {
               type: 'user:left',
-              roomId,
-              userId,
-              userName,
-              remainingUsers: room.users,
+              senderId: client.userId,
+              data: {
+                userId: client.userId,
+                userName: client.userName,
+                remainingUsers,
+              },
             });
-
-            if (room.users.length === 0) {
-              setTimeout(() => {
-                if (rooms.get(roomId)?.users.length === 0) {
-                  rooms.delete(roomId);
-                }
-              }, 600000);
-            }
           }
         }
       }, 15000);
@@ -288,35 +464,104 @@ wss.on('connection', (ws: WebSocket) => {
   });
 });
 
-// API Routes
+// REST & Signaling API Routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Serverless fallback HTTP signaling store for Vercel
-const serverlessMessages: { [key: string]: any[] } = {};
+// Direct room state query
+app.get('/api/room/:roomId', (req, res) => {
+  const normId = (req.params.roomId || '').trim().toLowerCase();
+  const room = rooms.get(normId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  res.json({ success: true, room: getRoomSnapshot(room) });
+});
 
+// Unified HTTP Signaling & Polling endpoint (used across devices, proxies, Cloud Run and Vercel)
 app.post('/api/signaling', (req, res) => {
-  const { roomId, message, fetchSince } = req.body;
+  const {
+    roomId,
+    userId,
+    userName,
+    userColor,
+    isHost,
+    action,
+    message,
+    fetchSince,
+    userState,
+  } = req.body;
+
   if (!roomId) {
     return res.status(400).json({ error: 'roomId required' });
   }
 
-  if (!serverlessMessages[roomId]) {
-    serverlessMessages[roomId] = [];
-  }
+  const normId = roomId.trim().toLowerCase();
+  const room = getOrCreateRoom(normId, userName, userId);
 
-  if (message) {
-    message.timestamp = Date.now();
-    serverlessMessages[roomId].push(message);
-    if (serverlessMessages[roomId].length > 200) {
-      serverlessMessages[roomId].shift();
+  // Keep participant registered and active
+  if (userId && userName) {
+    touchUser(normId, {
+      id: userId,
+      name: userName,
+      avatarColor: userColor,
+      isHost,
+    }, action === 'join');
+  } else if (userId) {
+    const existing = room.users.get(userId);
+    if (existing) {
+      existing.lastSeen = Date.now();
     }
   }
 
+  // Update user state if provided (camera, mic, etc.)
+  if (userId && userState) {
+    const user = room.users.get(userId);
+    if (user) {
+      Object.assign(user, userState);
+      user.lastSeen = Date.now();
+      dispatchRoomEvent(normId, {
+        type: 'user:state_update',
+        senderId: userId,
+        data: userState,
+      });
+    }
+  }
+
+  // If a new outgoing message is sent from this client:
+  if (message) {
+    if (message.type === 'join-room') {
+      touchUser(normId, {
+        id: message.userId,
+        name: message.userName,
+        avatarColor: message.userColor,
+        isHost: message.isHost,
+      }, true);
+    } else {
+      dispatchRoomEvent(normId, {
+        type: message.type,
+        senderId: message.senderId || userId,
+        targetId: message.targetId,
+        data: message.data !== undefined ? message.data : message,
+      });
+    }
+  }
+
+  // Filter events for this user since the given timestamp
   const since = Number(fetchSince) || 0;
-  const recent = serverlessMessages[roomId].filter((m: any) => m.timestamp > since);
-  res.json({ messages: recent, now: Date.now() });
+  const newEvents = room.events.filter(e => {
+    if (e.timestamp <= since) return false;
+    if (e.targetId && e.targetId !== userId) return false;
+    return true;
+  });
+
+  res.json({
+    success: true,
+    room: getRoomSnapshot(room),
+    messages: newEvents,
+    now: Date.now(),
+  });
 });
 
 // Gemini AI Film Recommendation Endpoint

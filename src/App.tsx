@@ -149,15 +149,30 @@ export default function App() {
       if (data.video && data.video.sourceUrl) {
         setVideoState(data.video);
       }
-      if (data.users) {
+      if (data.users && Array.isArray(data.users)) {
         setUsers(data.users);
         data.users.forEach((otherUser: RoomUser) => {
           if (otherUser.id !== userId) {
-            webrtc.createPeer(otherUser.id, true);
+            // Deterministic initiator to eliminate WebRTC offer collision
+            const isInitiator = userId > otherUser.id;
+            webrtc.createPeer(otherUser.id, isInitiator);
           }
         });
       }
       if (data.activeVote) setActiveVote(data.activeVote);
+    });
+
+    // A2. Incremental room users sync
+    const unsubUsersUpdated = socket.on('room:users_updated', ({ data }) => {
+      if (Array.isArray(data)) {
+        setUsers(data);
+        data.forEach((otherUser: RoomUser) => {
+          if (otherUser.id !== userId) {
+            const isInitiator = userId > otherUser.id;
+            webrtc.createPeer(otherUser.id, isInitiator);
+          }
+        });
+      }
     });
 
     // B. User Joined
@@ -166,7 +181,8 @@ export default function App() {
         setUsers(data.allUsers);
       }
       if (data?.user && data.user.id !== userId) {
-        webrtc.createPeer(data.user.id, true);
+        const isInitiator = userId > data.user.id;
+        webrtc.createPeer(data.user.id, isInitiator);
 
         setMessages((prev) => [
           ...prev,
@@ -184,8 +200,8 @@ export default function App() {
     });
 
     // C. User Left
-    const unsubUserLeft = socket.on('user:left', ({ data, userId: leftUserId }) => {
-      const targetId = leftUserId || data?.userId;
+    const unsubUserLeft = socket.on('user:left', ({ data, senderId }) => {
+      const targetId = data?.userId || senderId;
       if (targetId) {
         webrtc.removePeer(targetId);
       }
@@ -236,10 +252,13 @@ export default function App() {
     });
 
     // E. User State Update
-    const unsubUserState = socket.on('user:state_update', ({ userId: targetUserId, data }) => {
-      setUsers((prev) =>
-        prev.map((u) => (u.id === targetUserId ? { ...u, ...data } : u))
-      );
+    const unsubUserState = socket.on('user:state_update', ({ data, senderId }) => {
+      const targetUserId = data?.userId || senderId;
+      if (targetUserId) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === targetUserId ? { ...u, ...data } : u))
+        );
+      }
     });
 
     // F. Room Password Update
@@ -305,8 +324,12 @@ export default function App() {
       setActiveVote(data);
     });
 
+    // Request fresh room state from server upon joining
+    socket.requestRoomState();
+
     return () => {
       unsubRoomState();
+      unsubUsersUpdated();
       unsubUserJoined();
       unsubUserLeft();
       unsubOffer();
@@ -351,16 +374,21 @@ export default function App() {
     webrtc.setUserId(userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
-    // Request camera and microphone immediately
-    const stream = await webrtc.startLocalMedia(true, true);
-    if (stream) {
-      setLocalStream(stream);
-      setHasCamera(stream.getVideoTracks().length > 0);
-      setHasMic(stream.getAudioTracks().length > 0);
-    }
-
+    // Initialize socket connection immediately so user is in the room without media latency
     socket.init(targetRoom, userId, name, randomColor, asHost);
     setIsJoined(true);
+
+    // Request camera and microphone in background (non-blocking)
+    webrtc.startLocalMedia(true, true).then((stream) => {
+      if (stream) {
+        setLocalStream(stream);
+        const hasV = stream.getVideoTracks().length > 0;
+        const hasA = stream.getAudioTracks().length > 0;
+        setHasCamera(hasV);
+        setHasMic(hasA);
+        socket.updateUserState({ hasCamera: hasV, hasMic: hasA });
+      }
+    });
   };
 
   // Host Password Update
@@ -441,6 +469,7 @@ export default function App() {
     } else {
       webrtc.toggleCamera(nextState);
     }
+    socket.updateUserState({ hasCamera: nextState });
   };
 
   const handleToggleMic = async () => {
@@ -455,6 +484,7 @@ export default function App() {
     } else {
       webrtc.toggleMic(nextState);
     }
+    socket.updateUserState({ hasMic: nextState });
   };
 
   const handleSendMessage = async (text: string) => {

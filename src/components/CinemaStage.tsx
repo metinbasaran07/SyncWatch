@@ -517,7 +517,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           <div className="relative w-36 h-24 sm:w-40 sm:h-28 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center shrink-0">
             {localStream && localStream.getVideoTracks().length > 0 ? (
               <video
-                ref={fullscreenLocalVideoRef}
+                ref={(el) => {
+                  fullscreenLocalVideoRef.current = el;
+                  if (el && localStream && el.srcObject !== localStream) {
+                    el.srcObject = localStream;
+                    el.play().catch(() => {});
+                  }
+                }}
                 autoPlay
                 playsInline
                 muted

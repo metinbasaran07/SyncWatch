@@ -33,18 +33,40 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
     ? `${window.location.origin}/?room=${encodeURIComponent(roomId)}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
     : `https://cinesync.app/?room=${roomId}`;
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(roomId).then(() => {
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    });
+  const copyTextToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) {}
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return success;
+    } catch (err) {
+      return false;
+    }
   };
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(roomLink).then(() => {
-      setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2000);
-    });
+  const handleCopyCode = async () => {
+    await copyTextToClipboard(roomId);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleCopyLink = async () => {
+    await copyTextToClipboard(roomLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const handleSavePassword = (e: React.FormEvent) => {
