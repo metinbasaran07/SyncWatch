@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { MovieSuggestion, RoomState } from '../types';
 import { fetchMovieRecommendations } from '../services/api';
-import { socket } from '../services/socket';
 
 interface MovieDiscoveryProps {
   onLoadMovieIntoCinema: (title: string, url: string) => void;

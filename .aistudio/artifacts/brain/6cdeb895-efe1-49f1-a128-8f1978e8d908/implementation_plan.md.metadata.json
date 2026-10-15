@@ -1,6 +1,6 @@
 {
-  "summary": "Kullanıcı revizyonu: Ayarlanabilir kamera boyutu (Kompakt, Standart, Geniş ve ölçekleyici) ile Vercel sunucusuz (serverless) dağıtımına tam uyumlu hibrit sinyalleşme ve yapılandırma planı.",
-  "updatedAt": "2026-10-14T13:38:51.709277571Z",
+  "summary": "Saf Firebase Firestore altyapısıyla sıfırdan oda yönetimi, çoklu cihaz senkronizasyonu, video eşzamanlama, canlı sohbet ve WebRTC ses/görüntü iletişim mimarisi planı. Arayüzün tüm görsel zenginliği korunarak teknik çekirdek baştan yapılandırılacaktır.",
+  "updatedAt": "2026-10-15T14:59:27.087597456Z",
   "requestFeedback": true,
   "userFacing": true
 }

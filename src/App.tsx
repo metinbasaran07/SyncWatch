@@ -7,7 +7,8 @@ import { MovieDiscovery } from './components/MovieDiscovery';
 import { RoomModal } from './components/RoomModal';
 import { ShareRoomModal } from './components/ShareRoomModal';
 import { RoomState, RoomUser, VideoState, ChatMessage, EmojiReaction, MovieSuggestion } from './types';
-import { socket } from './services/socket';
+import { firebaseRoomService, db } from './services/firebaseRoomService';
+import { doc, setDoc } from 'firebase/firestore';
 import { webrtc } from './services/webrtc';
 import { deriveKeyFromPassword, encryptMessage, decryptMessage } from './services/crypto';
 import { MessageSquare, ShieldCheck, Film, Sparkles } from 'lucide-react';
@@ -73,7 +74,7 @@ export default function App() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [hasCamera, setHasCamera] = useState<boolean>(false);
   const [hasMic, setHasMic] = useState<boolean>(true);
-  const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false); // default open mic so voice is heard immediately
+  const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false);
   const [isPushToTalkActive, setIsPushToTalkActive] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [speakingVolume, setSpeakingVolume] = useState<number>(0);
@@ -91,22 +92,17 @@ export default function App() {
   const userJoinedAtRef = useRef<number>(Date.now());
 
   // Calculates whether current user entered the room first compared to otherUser.
-  // The person who entered the room first ("odaya ilk giren kişi") initiates the handshake with all users!
+  // The person who entered the room first initiates the WebRTC handshake with newer participants
   const checkIfInitiator = useCallback(
     (otherUser: RoomUser): boolean => {
       const myJoinedAt = userJoinedAtRef.current;
       const otherJoinedAt = otherUser.joinedAt || 0;
 
-      // 1. Primary rule: the user who joined earlier (smaller timestamp) initiates the handshake
       if (myJoinedAt && otherJoinedAt && myJoinedAt !== otherJoinedAt) {
         return myJoinedAt < otherJoinedAt;
       }
-
-      // 2. Room host is by definition the room creator / first user
       if (isHost && !otherUser.isHost) return true;
       if (!isHost && otherUser.isHost) return false;
-
-      // 3. Fallback deterministic tie-breaker
       return userId < otherUser.id;
     },
     [userId, isHost]
@@ -153,9 +149,9 @@ export default function App() {
     };
   }, [isJoined, isPushToTalkMode]);
 
-  // 2. Socket Event Subscriptions & Multi-Device Peer Handling
+  // 2. Pure Firebase Real-Time Firestore Synchronization
   useEffect(() => {
-    if (!isJoined) return;
+    if (!isJoined || !roomId) return;
 
     webrtc.setCallbacks(
       (streams) => {
@@ -167,223 +163,98 @@ export default function App() {
       }
     );
 
-    // A. Room full state on join
-    const unsubRoomState = socket.on('room:state', ({ data }) => {
+    // A. Room document subscription (video state, room name, password, vote)
+    const unsubRoom = firebaseRoomService.subscribeToRoom(roomId, (data) => {
       if (!data) return;
       if (data.name) setRoomName(data.name);
       if (data.video && data.video.sourceUrl) {
-        setVideoState(data.video);
-      }
-      if (data.users && Array.isArray(data.users)) {
-        setUsers(data.users);
-        const me = data.users.find((u: RoomUser) => u.id === userId);
-        if (me?.joinedAt) {
-          userJoinedAtRef.current = me.joinedAt;
-        }
-
-        data.users.forEach((otherUser: RoomUser) => {
-          if (otherUser.id !== userId) {
-            // The person who entered the room first automatically initiates the handshake
-            const isInitiator = checkIfInitiator(otherUser);
-            webrtc.createPeer(otherUser.id, isInitiator);
+        setVideoState((prev) => {
+          // If updated locally by self in the last 2 seconds, avoid self-jitter
+          if (data.video.updatedBy === userId && prev.sourceUrl === data.video.sourceUrl) {
+            return prev;
           }
+          return data.video;
         });
       }
-      if (data.activeVote) setActiveVote(data.activeVote);
-    });
-
-    // A2. Incremental room users sync
-    const unsubUsersUpdated = socket.on('room:users_updated', ({ data }) => {
-      if (Array.isArray(data)) {
-        setUsers(data);
-        const me = data.find((u: RoomUser) => u.id === userId);
-        if (me?.joinedAt) {
-          userJoinedAtRef.current = me.joinedAt;
-        }
-
-        data.forEach((otherUser: RoomUser) => {
-          if (otherUser.id !== userId) {
-            const isInitiator = checkIfInitiator(otherUser);
-            webrtc.createPeer(otherUser.id, isInitiator);
-          }
-        });
-      }
-    });
-
-    // B. User Joined
-    const unsubUserJoined = socket.on('user:joined', ({ data }) => {
-      if (data?.allUsers && Array.isArray(data.allUsers)) {
-        setUsers(data.allUsers);
-        const me = data.allUsers.find((u: RoomUser) => u.id === userId);
-        if (me?.joinedAt) {
-          userJoinedAtRef.current = me.joinedAt;
+      if (data.hasPassword !== undefined) {
+        if (data.hasPassword && data.password && data.password !== roomPassword) {
+          setRoomPassword(data.password);
+          deriveKeyFromPassword(data.password).then(setCryptoKey);
+        } else if (!data.hasPassword) {
+          setRoomPassword('');
+          setCryptoKey(null);
         }
       }
-      if (data?.user && data.user.id !== userId) {
-        // Current user was already in the room; the newcomer data.user just joined.
-        // Current user entered first ("odaya ilk giren kişi") and initiates the automatic handshake!
-        const isInitiator = checkIfInitiator(data.user);
-        webrtc.createPeer(data.user.id, isInitiator);
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: 'sys_' + Date.now(),
-            senderId: 'system',
-            senderName: 'Sistem',
-            senderColor: '#94a3b8',
-            text: `${data.user.name} odaya katıldı.`,
-            timestamp: Date.now(),
-            isSystem: true,
-          },
-        ]);
+      if (data.activeVote !== undefined) {
+        setActiveVote(data.activeVote);
       }
     });
 
-    // C. User Left
-    const unsubUserLeft = socket.on('user:left', ({ data, senderId }) => {
-      const targetId = data?.userId || senderId;
-      if (targetId) {
-        webrtc.removePeer(targetId);
+    // B. Live participants subscription
+    const unsubParticipants = firebaseRoomService.subscribeToParticipants(roomId, (list) => {
+      setUsers(list);
+      const me = list.find((u) => u.id === userId);
+      if (me?.joinedAt) {
+        userJoinedAtRef.current = me.joinedAt;
       }
-      if (data?.remainingUsers) {
-        setUsers(data.remainingUsers);
-      }
-      if (data?.userName) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: 'sys_' + Date.now(),
-            senderId: 'system',
-            senderName: 'Sistem',
-            senderColor: '#94a3b8',
-            text: `${data.userName} odadan ayrıldı.`,
-            timestamp: Date.now(),
-            isSystem: true,
-          },
-        ]);
-      }
+
+      const activeIds = new Set(list.map((u) => u.id));
+      // Cleanup remote streams for participants who left
+      remoteStreams.forEach((_, peerId) => {
+        if (!activeIds.has(peerId)) {
+          webrtc.removePeer(peerId);
+        }
+      });
+
+      // Establish P2P Mesh with peers
+      list.forEach((otherUser) => {
+        if (otherUser.id !== userId) {
+          const isInitiator = checkIfInitiator(otherUser);
+          webrtc.createPeer(otherUser.id, isInitiator);
+        }
+      });
     });
 
-    // WebRTC Signaling
-    const unsubOffer = socket.on('signal:offer', ({ data, senderId }) => {
-      if (senderId && senderId !== userId) {
-        webrtc.handleOffer(senderId, data);
+    // C. Live chat messages subscription
+    const unsubMessages = firebaseRoomService.subscribeToMessages(roomId, async (msgs) => {
+      const processed: ChatMessage[] = [];
+      for (const msg of msgs) {
+        let displayText = msg.text;
+        if (msg.isEncrypted && (msg as any).ciphertext && (msg as any).iv) {
+          displayText = await decryptMessage((msg as any).ciphertext, (msg as any).iv, cryptoKey);
+        }
+        processed.push({ ...msg, text: displayText });
       }
+      setMessages(processed);
     });
 
-    const unsubAnswer = socket.on('signal:answer', ({ data, senderId }) => {
-      if (senderId && senderId !== userId) {
-        webrtc.handleAnswer(senderId, data);
-      }
-    });
-
-    const unsubCandidate = socket.on('signal:candidate', ({ data, senderId }) => {
-      if (senderId && senderId !== userId) {
-        webrtc.handleCandidate(senderId, data);
-      }
-    });
-
-    // D. Video Sync
-    const unsubSyncVideo = socket.on('sync:video', ({ data, senderId }) => {
-      if (senderId === userId) return;
-      if (data) {
-        setVideoState(data);
-      }
-    });
-
-    // E. User State Update
-    const unsubUserState = socket.on('user:state_update', ({ data, senderId }) => {
-      const targetUserId = data?.userId || senderId;
-      if (targetUserId) {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === targetUserId ? { ...u, ...data } : u))
-        );
-      }
-    });
-
-    // F. Room Password Update
-    const unsubPasswordUpdate = socket.on('room:password_update', async ({ data }) => {
-      const newPwd = data?.password || '';
-      setRoomPassword(newPwd);
-      if (newPwd) {
-        const key = await deriveKeyFromPassword(newPwd);
-        setCryptoKey(key);
-      } else {
-        setCryptoKey(null);
-      }
-
-      const url = new URL(window.location.href);
-      if (newPwd) url.searchParams.set('pwd', newPwd);
-      else url.searchParams.delete('pwd');
-      window.history.replaceState({}, '', url.toString());
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: 'sys_' + Date.now(),
-          senderId: 'system',
-          senderName: 'Sistem',
-          senderColor: '#10b981',
-          text: newPwd
-            ? 'Oda şifresi güncellendi. Mesajlar yeni anahtarla şifreleniyor.'
-            : 'Oda şifresi kaldırıldı. Artık açık oda.',
-          timestamp: Date.now(),
-          isSystem: true,
-        },
-      ]);
-    });
-
-    // G. Chat Message
-    const unsubChatMessage = socket.on('chat:message', async ({ data }) => {
-      if (!data) return;
-      let displayText = data.text;
-      if (data.isEncrypted && data.ciphertext && data.iv) {
-        displayText = await decryptMessage(data.ciphertext, data.iv, cryptoKey);
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          ...data,
-          text: displayText,
-        },
-      ]);
-    });
-
-    // H. Reactions
-    const unsubChatReaction = socket.on('chat:reaction', ({ data }) => {
-      if (!data) return;
-      setReactions((prev) => [...prev, data]);
+    // D. Live emoji reactions subscription
+    const unsubReactions = firebaseRoomService.subscribeToReactions(roomId, (rx) => {
+      setReactions((prev) => [...prev, rx]);
       setTimeout(() => {
-        setReactions((prev) => prev.filter((r) => r.id !== data.id));
+        setReactions((prev) => prev.filter((r) => r.id !== rx.id));
       }, 3000);
     });
 
-    // I. Vote Update
-    const unsubVoteUpdate = socket.on('vote:update', ({ data }) => {
-      setActiveVote(data);
-    });
-
-    // Request fresh room state from server upon joining
-    socket.requestRoomState();
+    // E. WebRTC P2P Signals subscription
+    const unsubSignals = firebaseRoomService.subscribeToSignals(
+      roomId,
+      userId,
+      ({ senderId, type, data }) => {
+        if (senderId && senderId !== userId) {
+          webrtc.handleIncomingSignal(senderId, type, data);
+        }
+      }
+    );
 
     return () => {
-      unsubRoomState();
-      unsubUsersUpdated();
-      unsubUserJoined();
-      unsubUserLeft();
-      unsubOffer();
-      unsubAnswer();
-      unsubCandidate();
-      unsubSyncVideo();
-      unsubUserState();
-      unsubPasswordUpdate();
-      unsubChatMessage();
-      unsubChatReaction();
-      unsubVoteUpdate();
+      unsubRoom();
+      unsubParticipants();
+      unsubMessages();
+      unsubReactions();
+      unsubSignals();
     };
-  }, [isJoined, userId, cryptoKey]);
+  }, [isJoined, roomId, userId, cryptoKey, checkIfInitiator]);
 
   // Join Room Handler
   const handleJoinRoom = async (
@@ -393,8 +264,9 @@ export default function App() {
     asHost: boolean,
     customName?: string
   ) => {
+    const cleanRoom = targetRoom.trim().toLowerCase();
     setUserName(name);
-    setRoomId(targetRoom);
+    setRoomId(cleanRoom);
     setRoomPassword(password);
     setIsHost(asHost);
     if (customName) {
@@ -408,74 +280,98 @@ export default function App() {
     if (password.trim()) {
       const key = await deriveKeyFromPassword(password.trim());
       setCryptoKey(key);
+    } else {
+      setCryptoKey(null);
     }
 
     const newUrl = new URL(window.location.href);
-    newUrl.searchParams.set('room', targetRoom);
+    newUrl.searchParams.set('room', cleanRoom);
     if (password.trim()) {
       newUrl.searchParams.set('pwd', password.trim());
     }
     window.history.replaceState({}, '', newUrl.toString());
 
-    webrtc.setUserId(userId);
+    webrtc.init(cleanRoom, userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
-    // Acquire local camera and mic with a fast race to ensure tracks exist before initial offer
     try {
-      const initialMediaPromise = webrtc.startLocalMedia(true, true);
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
-      const stream = await Promise.race([initialMediaPromise, timeoutPromise]);
+      const stream = await webrtc.startLocalMedia(true, true);
       if (stream) {
         setLocalStream(stream);
-        const hasV = stream.getVideoTracks().length > 0;
-        const hasA = stream.getAudioTracks().length > 0;
-        setHasCamera(hasV);
-        setHasMic(hasA);
+        setHasCamera(stream.getVideoTracks().length > 0);
+        setHasMic(stream.getAudioTracks().length > 0);
       }
     } catch (e) {
-      console.warn('Initial media race skipped or failed:', e);
+      console.warn('Local media acquire skipped:', e);
     }
 
     userJoinedAtRef.current = Date.now();
 
-    // Initialize socket connection immediately
-    socket.init(targetRoom, userId, name, randomColor, asHost);
-    setIsJoined(true);
+    // Pure Firestore Join & Presence Registration
+    const joinResult = await firebaseRoomService.joinRoom(
+      cleanRoom,
+      {
+        id: userId,
+        name,
+        avatarColor: randomColor,
+        isHost: asHost,
+        hasCamera: hasCamera,
+        hasMic: hasMic,
+      },
+      password
+    );
 
-    // If stream wasn't ready during fast race, finish acquiring in background
-    webrtc.startLocalMedia(true, true).then((stream) => {
-      if (stream) {
-        setLocalStream(stream);
-        const hasV = stream.getVideoTracks().length > 0;
-        const hasA = stream.getAudioTracks().length > 0;
-        setHasCamera(hasV);
-        setHasMic(hasA);
-        socket.updateUserState({ hasCamera: hasV, hasMic: hasA });
+    if (!joinResult.success) {
+      alert(joinResult.error || 'Odaya katılırken bir sorun oluştu.');
+      setIsRoomModalOpen(true);
+      return;
+    }
+
+    if (joinResult.room) {
+      if (joinResult.room.name) setRoomName(joinResult.room.name);
+      if (joinResult.room.video && joinResult.room.video.sourceUrl) {
+        setVideoState(joinResult.room.video);
       }
-    });
+    }
+
+    setIsJoined(true);
   };
 
   // Host Password Update
   const handleHostUpdatePassword = async (newPassword: string) => {
-    setRoomPassword(newPassword);
-    if (newPassword.trim()) {
-      const key = await deriveKeyFromPassword(newPassword.trim());
+    const clean = newPassword.trim();
+    setRoomPassword(clean);
+    if (clean) {
+      const key = await deriveKeyFromPassword(clean);
       setCryptoKey(key);
     } else {
       setCryptoKey(null);
     }
 
     const url = new URL(window.location.href);
-    if (newPassword.trim()) url.searchParams.set('pwd', newPassword.trim());
+    if (clean) url.searchParams.set('pwd', clean);
     else url.searchParams.delete('pwd');
     window.history.replaceState({}, '', url.toString());
 
-    socket.updatePassword(newPassword.trim());
+    if (roomId) {
+      const roomRef = doc(db, 'rooms', roomId);
+      await setDoc(
+        roomRef,
+        {
+          hasPassword: Boolean(clean),
+          password: clean,
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      );
+    }
   };
 
   // Leave room and return to room creation/join screen
   const handleLeaveRoom = () => {
-    socket.disconnect();
+    if (roomId) {
+      firebaseRoomService.leaveRoom(roomId, userId);
+    }
     webrtc.cleanup();
     setIsJoined(false);
     setRoomId('');
@@ -494,14 +390,16 @@ export default function App() {
 
   // Video State Update
   const handleUpdateVideo = (update: Partial<VideoState>) => {
-    const nextState = {
+    const nextState: VideoState = {
       ...videoState,
       ...update,
       lastUpdated: Date.now(),
-      updatedBy: userName,
+      updatedBy: userName || userId,
     };
     setVideoState(nextState);
-    socket.syncVideo(nextState);
+    if (roomId) {
+      firebaseRoomService.syncVideo(roomId, nextState, userId);
+    }
   };
 
   // 1080p Screen & Tab Sharing
@@ -552,7 +450,9 @@ export default function App() {
     } else {
       webrtc.toggleCamera(nextState);
     }
-    socket.updateUserState({ hasCamera: nextState });
+    if (roomId) {
+      firebaseRoomService.updateParticipantState(roomId, userId, { hasCamera: nextState });
+    }
   };
 
   const handleToggleMic = async () => {
@@ -567,11 +467,14 @@ export default function App() {
     } else {
       webrtc.toggleMic(nextState);
     }
-    socket.updateUserState({ hasMic: nextState });
+    if (roomId) {
+      firebaseRoomService.updateParticipantState(roomId, userId, { hasMic: nextState });
+    }
   };
 
   const handleSendMessage = async (text: string) => {
-    const msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    if (!roomId || !text.trim()) return;
+
     let ciphertext = text;
     let iv = '';
     let isEncrypted = false;
@@ -583,31 +486,16 @@ export default function App() {
       isEncrypted = enc.isEncrypted;
     }
 
-    const payload: ChatMessage = {
-      id: msgId,
+    await firebaseRoomService.sendMessage(roomId, {
       senderId: userId,
       senderName: userName,
       senderColor: userColor,
       text: isEncrypted ? ciphertext : text,
-      timestamp: Date.now(),
-      isEncrypted,
-    };
-
-    (payload as any).ciphertext = ciphertext;
-    (payload as any).iv = iv;
-
-    socket.sendChatMessage(payload);
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        ...payload,
-        text,
-      },
-    ]);
+    });
   };
 
   const handleTriggerReaction = (emoji: string) => {
+    if (!roomId) return;
     const reaction: EmojiReaction = {
       id: 'rx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
       emoji,
@@ -616,11 +504,11 @@ export default function App() {
       xOffset: Math.floor(Math.random() * 80) + 10,
     };
 
-    socket.sendReaction(reaction);
     setReactions((prev) => [...prev, reaction]);
     setTimeout(() => {
       setReactions((prev) => prev.filter((r) => r.id !== reaction.id));
     }, 3000);
+    firebaseRoomService.sendReaction(roomId, reaction);
   };
 
   const handleLoadMovieIntoCinema = (title: string, url: string) => {
@@ -634,7 +522,7 @@ export default function App() {
     setActiveTab('cinema');
   };
 
-  const handleStartVote = (movie: MovieSuggestion) => {
+  const handleStartVote = async (movie: MovieSuggestion) => {
     const voteData = {
       id: 'vote_' + Date.now(),
       movie,
@@ -644,11 +532,14 @@ export default function App() {
       expiresAt: Date.now() + 60000,
     };
     setActiveVote(voteData);
-    socket.updateVote(voteData);
+    if (roomId) {
+      const roomRef = doc(db, 'rooms', roomId);
+      await setDoc(roomRef, { activeVote: voteData }, { merge: true });
+    }
   };
 
-  const handleCastVote = (vote: 'yes' | 'no') => {
-    if (!activeVote) return;
+  const handleCastVote = async (vote: 'yes' | 'no') => {
+    if (!activeVote || !roomId) return;
     const yes = new Set(activeVote.yesVotes);
     const no = new Set(activeVote.noVotes);
 
@@ -666,7 +557,8 @@ export default function App() {
       noVotes: Array.from(no),
     };
     setActiveVote(updated);
-    socket.updateVote(updated);
+    const roomRef = doc(db, 'rooms', roomId);
+    await setDoc(roomRef, { activeVote: updated }, { merge: true });
   };
 
   return (

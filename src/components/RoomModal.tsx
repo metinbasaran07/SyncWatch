@@ -18,7 +18,7 @@ import {
   Tv
 } from 'lucide-react';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { db } from '../services/firebaseRoomService';
 
 export interface ActiveRoomItem {
   id: string;

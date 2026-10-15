@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 64;
+      return id is string && id.size() > 0 && id.size() <= 128;
     }
 
     match /test/connection {
@@ -13,11 +13,7 @@ service cloud.firestore {
     match /rooms/{roomId} {
       allow read, write: if isValidId(roomId);
 
-      match /users/{userId} {
-        allow read, write: if isValidId(roomId) && isValidId(userId);
-      }
-
-      match /events/{eventId} {
+      match /{allSubcollections=**} {
         allow read, write: if isValidId(roomId);
       }
     }

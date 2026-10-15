@@ -1,12 +1,12 @@
 /**
- * CineSync WebRTC Media & Mesh Engine
+ * CineSync WebRTC Media & Mesh Engine (Firestore P2P Signaling)
  * - Full P2P Mesh for Multi-user Camera & Audio
  * - 1080p60 Motion Screen/Tab Sharing
  * - Push-to-Talk (PTT) with Instant Track Gating
  * - Live Speaking Volume Analyzer
  */
 
-import { socket } from './socket';
+import { firebaseRoomService } from './firebaseRoomService';
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
@@ -16,7 +16,7 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // Public OpenRelay TURN servers for Symmetric NAT / 4G / 5G / cellular mobile devices
+    // Public OpenRelay TURN servers for symmetric NAT / cellular / mobile networks
     {
       urls: [
         'turn:openrelay.metered.ca:80',
@@ -27,9 +27,7 @@ const ICE_SERVERS: RTCConfiguration = {
       credential: 'openrelay',
     },
     {
-      urls: [
-        'turns:openrelay.metered.ca:443?transport=tcp',
-      ],
+      urls: ['turns:openrelay.metered.ca:443?transport=tcp'],
       username: 'openrelay',
       credential: 'openrelay',
     },
@@ -52,17 +50,19 @@ class WebRTCManager {
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private animFrameId: number | null = null;
-  private isPushToTalkMode: boolean = false; // default open mic so sound works immediately!
+  private isPushToTalkMode: boolean = false;
   private isPushToTalkActive: boolean = false;
+  private currentRoomId: string = '';
   private currentUserId: string = '';
+
+  public init(roomId: string, userId: string) {
+    this.currentRoomId = roomId;
+    this.currentUserId = userId;
+  }
 
   public setCallbacks(onStreams: RemoteStreamsChangeCallback, onSpeaking?: SpeakingCallback) {
     this.onRemoteStreamsChange = onStreams;
     if (onSpeaking) this.onSpeakingChanged = onSpeaking;
-  }
-
-  public setUserId(userId: string) {
-    this.currentUserId = userId;
   }
 
   public getRemoteStreams(): Map<string, MediaStream> {
@@ -85,46 +85,47 @@ class WebRTCManager {
       const audioTrack = this.localStream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = active || !this.isPushToTalkMode;
-        socket.updateUserState({ isSpeaking: active });
+        if (this.currentRoomId && this.currentUserId) {
+          firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+            isSpeaking: active,
+          });
+        }
       }
     }
   }
 
   /**
-   * Initializes local user camera and microphone with robust fallback
+   * Initializes local user camera and microphone
    */
   public async startLocalMedia(video: boolean = true, audio: boolean = true): Promise<MediaStream | null> {
     try {
-      // First try requesting both as asked
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: video ? {
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, max: 30 },
-          } : false,
-          audio: audio ? {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          } : false,
+          video: video
+            ? {
+                width: { ideal: 640, max: 1280 },
+                height: { ideal: 480, max: 720 },
+                frameRate: { ideal: 30, max: 30 },
+              }
+            : false,
+          audio: audio
+            ? {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              }
+            : false,
         });
       } catch (errFirst) {
-        console.warn('Initial getUserMedia failed, retrying with flexible constraints:', errFirst);
-        // Fallback: request whatever is available (e.g. mic only or camera only)
+        console.warn('Initial getUserMedia fallback:', errFirst);
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: video,
-            audio: audio,
-          });
+          stream = await navigator.mediaDevices.getUserMedia({ video, audio });
         } catch (errSecond) {
           if (video && audio) {
-            // Try audio only if camera is blocked/unavailable
             try {
               stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             } catch (errAudio) {
-              // Try video only
               stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             }
           }
@@ -132,15 +133,14 @@ class WebRTCManager {
       }
 
       if (!stream) {
-        throw new Error('No media stream could be acquired');
+        throw new Error('No media stream available');
       }
 
       if (this.localStream) {
-        this.localStream.getTracks().forEach(t => t.stop());
+        this.localStream.getTracks().forEach((t) => t.stop());
       }
       this.localStream = stream;
 
-      // Handle push-to-talk gating
       const audioTrack = this.localStream.getAudioTracks()[0];
       if (audioTrack && this.isPushToTalkMode) {
         audioTrack.enabled = this.isPushToTalkActive;
@@ -150,11 +150,11 @@ class WebRTCManager {
 
       this.setupAudioMeter(this.localStream);
 
-      // Update existing peer connections with new tracks
+      // Attach new tracks to all existing peers
       this.peers.forEach((peer) => {
         const senders = peer.getSenders();
         this.localStream!.getTracks().forEach((track) => {
-          const sender = senders.find(s => s.track?.kind === track.kind);
+          const sender = senders.find((s) => s.track?.kind === track.kind);
           if (sender) {
             sender.replaceTrack(track).catch(() => {});
           } else {
@@ -163,10 +163,12 @@ class WebRTCManager {
         });
       });
 
-      socket.updateUserState({
-        hasCamera: this.localStream.getVideoTracks().length > 0 && this.localStream.getVideoTracks()[0].enabled,
-        hasMic: this.localStream.getAudioTracks().length > 0 && this.localStream.getAudioTracks()[0].enabled,
-      });
+      if (this.currentRoomId && this.currentUserId) {
+        firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+          hasCamera: this.localStream.getVideoTracks().length > 0 && this.localStream.getVideoTracks()[0].enabled,
+          hasMic: this.localStream.getAudioTracks().length > 0 && this.localStream.getAudioTracks()[0].enabled,
+        });
+      }
 
       return this.localStream;
     } catch (err) {
@@ -175,9 +177,6 @@ class WebRTCManager {
     }
   }
 
-  /**
-   * Starts high-fidelity 1080p/60fps screen & tab sharing with stereo movie sound
-   */
   public async startHighQualityScreenShare(): Promise<MediaStream | null> {
     try {
       if (this.screenStream) {
@@ -192,38 +191,65 @@ class WebRTCManager {
           frameRate: { ideal: 60, max: 60 },
         },
         audio: {
-          suppressLocalAudioPlayback: false,
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
           channelCount: 2,
-        },
-      } as any);
+        } as any,
+      });
 
       const videoTrack = this.screenStream.getVideoTracks()[0];
       if (videoTrack) {
-        if ('contentHint' in videoTrack) {
-          (videoTrack as any).contentHint = 'motion';
-        }
-
+        videoTrack.contentHint = 'motion';
         videoTrack.onended = () => {
           this.stopScreenShare();
         };
+
+        this.peers.forEach((peer) => {
+          const senders = peer.getSenders();
+          const videoSender = senders.find((s) => s.track?.kind === 'video');
+          if (videoSender) {
+            videoSender.replaceTrack(videoTrack).catch(() => {});
+          }
+        });
       }
 
-      socket.updateUserState({ isSharingScreen: true });
+      if (this.currentRoomId && this.currentUserId) {
+        firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+          isSharingScreen: true,
+        });
+      }
+
       return this.screenStream;
     } catch (err) {
-      console.error('High quality screen share cancelled or error:', err);
+      console.warn('Screen share cancelled or failed:', err);
       return null;
     }
   }
 
   public stopScreenShare() {
     if (this.screenStream) {
-      this.screenStream.getTracks().forEach(t => t.stop());
+      this.screenStream.getTracks().forEach((track) => track.stop());
       this.screenStream = null;
-      socket.updateUserState({ isSharingScreen: false });
+
+      if (this.localStream) {
+        const localVideo = this.localStream.getVideoTracks()[0];
+        if (localVideo) {
+          this.peers.forEach((peer) => {
+            const senders = peer.getSenders();
+            const videoSender = senders.find((s) => s.track?.kind === 'video');
+            if (videoSender) {
+              videoSender.replaceTrack(localVideo).catch(() => {});
+            }
+          });
+        }
+      }
+
+      if (this.currentRoomId && this.currentUserId) {
+        firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+          isSharingScreen: false,
+        });
+      }
     }
   }
 
@@ -232,7 +258,11 @@ class WebRTCManager {
       const videoTrack = this.localStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.enabled = enabled;
-        socket.updateUserState({ hasCamera: enabled });
+        if (this.currentRoomId && this.currentUserId) {
+          firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+            hasCamera: enabled,
+          });
+        }
       }
     }
   }
@@ -242,7 +272,11 @@ class WebRTCManager {
       const audioTrack = this.localStream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = enabled;
-        socket.updateUserState({ hasMic: enabled });
+        if (this.currentRoomId && this.currentUserId) {
+          firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
+            hasMic: enabled,
+          });
+        }
       }
     }
   }
@@ -255,7 +289,7 @@ class WebRTCManager {
     return this.screenStream;
   }
 
-  // --- WebRTC Peer Mesh Signaling Implementation ---
+  // --- WebRTC Peer Mesh Signaling via Firestore ---
   public async createPeer(targetUserId: string, isInitiator: boolean): Promise<RTCPeerConnection> {
     if (this.peers.has(targetUserId)) {
       const existingPeer = this.peers.get(targetUserId)!;
@@ -269,7 +303,13 @@ class WebRTCManager {
               offerToReceiveVideo: true,
             });
             await existingPeer.setLocalDescription(offer);
-            socket.sendSignal('offer', offer, targetUserId);
+            firebaseRoomService.sendSignal(
+              this.currentRoomId,
+              this.currentUserId,
+              targetUserId,
+              'offer',
+              offer
+            );
           } catch (err) {
             console.error('Error creating WebRTC offer on existing peer:', err);
           }
@@ -281,7 +321,6 @@ class WebRTCManager {
     const peer = new RTCPeerConnection(ICE_SERVERS);
     this.peers.set(targetUserId, peer);
 
-    // Add local tracks to peer if available
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
         try {
@@ -289,14 +328,12 @@ class WebRTCManager {
         } catch (e) {}
       });
     } else {
-      // Add transceivers so offer negotiates bidirectional audio/video
       try {
         peer.addTransceiver('audio', { direction: 'sendrecv' });
         peer.addTransceiver('video', { direction: 'sendrecv' });
       } catch (e) {}
     }
 
-    // Handle incoming remote media tracks
     peer.ontrack = (event) => {
       const [stream] = event.streams;
       if (stream) {
@@ -307,15 +344,24 @@ class WebRTCManager {
       }
     };
 
-    // Handle ICE Candidates
     peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.sendSignal('candidate', event.candidate, targetUserId);
+      if (event.candidate && this.currentRoomId) {
+        firebaseRoomService.sendSignal(
+          this.currentRoomId,
+          this.currentUserId,
+          targetUserId,
+          'candidate',
+          event.candidate
+        );
       }
     };
 
     peer.onconnectionstatechange = () => {
-      if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed' || peer.connectionState === 'closed') {
+      if (
+        peer.connectionState === 'disconnected' ||
+        peer.connectionState === 'failed' ||
+        peer.connectionState === 'closed'
+      ) {
         this.remoteStreams.delete(targetUserId);
         this.peers.delete(targetUserId);
         if (this.onRemoteStreamsChange) {
@@ -331,7 +377,13 @@ class WebRTCManager {
           offerToReceiveVideo: true,
         });
         await peer.setLocalDescription(offer);
-        socket.sendSignal('offer', offer, targetUserId);
+        firebaseRoomService.sendSignal(
+          this.currentRoomId,
+          this.currentUserId,
+          targetUserId,
+          'offer',
+          offer
+        );
       } catch (err) {
         console.error('Error creating WebRTC offer:', err);
       }
@@ -364,7 +416,13 @@ class WebRTCManager {
       await this.drainCandidates(senderId, peer);
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
-      socket.sendSignal('answer', answer, senderId);
+      firebaseRoomService.sendSignal(
+        this.currentRoomId,
+        this.currentUserId,
+        senderId,
+        'answer',
+        answer
+      );
     } catch (err) {
       console.error('Error handling WebRTC offer:', err);
     }
@@ -391,11 +449,20 @@ class WebRTCManager {
         console.error('Error adding ICE candidate:', err);
       }
     } else {
-      // Queue candidate until remote description is set
       if (!this.pendingCandidates.has(senderId)) {
         this.pendingCandidates.set(senderId, []);
       }
       this.pendingCandidates.get(senderId)!.push(candidate);
+    }
+  }
+
+  public handleIncomingSignal(senderId: string, type: string, data: any) {
+    if (type === 'offer') {
+      this.handleOffer(senderId, data);
+    } else if (type === 'answer') {
+      this.handleAnswer(senderId, data);
+    } else if (type === 'candidate') {
+      this.handleCandidate(senderId, data);
     }
   }
 
@@ -465,9 +532,9 @@ class WebRTCManager {
   public cleanup() {
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     if (this.audioCtx) this.audioCtx.close();
-    if (this.localStream) this.localStream.getTracks().forEach(t => t.stop());
-    if (this.screenStream) this.screenStream.getTracks().forEach(t => t.stop());
-    this.peers.forEach(peer => peer.close());
+    if (this.localStream) this.localStream.getTracks().forEach((t) => t.stop());
+    if (this.screenStream) this.screenStream.getTracks().forEach((t) => t.stop());
+    this.peers.forEach((peer) => peer.close());
     this.peers.clear();
     this.remoteStreams.clear();
   }

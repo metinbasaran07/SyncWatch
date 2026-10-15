@@ -1,125 +1,70 @@
-# CineSync: Yüksek Kaliteli Eşzamanlı İzleme, Bas-Konuş & Vercel Uyumlu Platform
+# CineSync Teknik Altyapı Yenileme Planı (Pure Firebase Firestore)
 
-Düşük gecikmeli ve yüksek bit-rate video senkronizasyonu, 1080p/60fps kalitesinde harici film/sekme paylaşımı, tuş kontrollü Bas-Konuş (Push-to-Talk) ses/kamera iletişimi, ayarlanabilir kamera boyutları ve Vercel platformuna %100 uyumlu mimari.
-
-### Kullanıcı Revizyonu ve Yeni İstekler
-
-> [!IMPORTANT]
-> Kullanıcının eklediği yeni gereksinimler:
-> 1. **Ayarlanabilir Kamera Boyutu**: Katılımcı kameralarının boyutunun serbestçe ayarlanabilmesi (Kompakt, Normal, Sinematik Büyük ve yüzdelik boyut ölçekleyici). İstenildiğinde tek tıkla gizlenebilme veya sinema moduna geçebilme.
-> 2. **Vercel Yayınına Tam Uyum**: Vercel Serverless ortamının kısıtlamalarına (uzun süreli kalıcı soket bağlantısı sınırlamaları) karşı hem AI Studio / Cloud Run ortamında yerel WebSocket, hem de Vercel üzerinde sorunsuz çalışan akıllı hibrit sinyalleşme ve `vercel.json` / statik Vite yapılandırması.
+Kullanıcının talebi ve yanıtları doğrultusunda, arayüzün (UI) tüm tasarımı ve görsel zenginliği birebir korunurken; karmaşık ve cihazlar arası senkronizasyon kopukluğuna yol açan eski WebSocket/hibrit teknik altyapı tamamen sıfırlanıp yerine **Saf Firebase Firestore Gerçek Zamanlı Mimarisi** kurulacaktır.
 
 ---
 
-## 1. Genel Bakış ve Temel Konsept
+## 1. Mimari Genel Bakış ve Hedefler
 
-**CineSync**, arkadaşların Netflix, YouTube veya harici web sitelerinden 1080p yüksek kalitede film izleyebildiği, birbirini ayarlanabilir kamera pencereleriyle görebildiği ve bas-konuş ile film keyfini bozmadan iletişim kurabildiği modern bir izleme ortamıdır.
+1. **Tamamen Güvenilir Çoklu Cihaz Desteği:**
+   - 1. kişi bilgisayarından veya telefonundan oda oluşturduğunda Firestore üzerinde benzersiz 6 haneli oda kodu üretilir.
+   - 2. kişi (başka bir cihazdan, farklı ağdan veya mobil internetten) bu 6 haneli kodu girerek veya paylaşılan linke (`?room=123456`) tıklayarak anında odaya katılır.
+   - Her iki cihaz da Firestore `onSnapshot` gerçek zamanlı dinleyicileriyle tek ve tutarlı bir durum (Single Source of Truth) üzerinden haberleşir.
 
-- **Özelleştirilebilir Kamera Boyutlandırması**: İzleyicinin tercihine göre mini/kompakt, standart, büyük boy veya slider ile serbest ölçeklendirilebilen kamera şeridi.
-- **Kusursuz Senkronizasyon (Öncelikli)**: YouTube, doğrudan video bağlantıları (MP4/HLS) ve sekme ekran paylaşımında düşük gecikme ve otomatik drift düzeltmesi.
-- **Vercel Dağıtımına Hazır**: `vercel.json`, standart Vite derleme yapılandırması (`dist`) ve Vercel Functions / WebRTC sinyalleşme uyumluluğu.
+2. **Video Eşzamanlaması (Playback Sync):**
+   - Oynat/Durdur, saniye sarma ve video değiştirme eylemleri Firestore'daki `rooms/{roomId}` belgesine yazılır.
+   - Oynatma zamanı `currentTime` ve `updatedAt` ile senkronize edilerek ağ gecikmelerinden bağımsız mikrosaniye hassasiyetinde senkron sağlanır.
 
----
+3. **Gerçek Zamanlı Sohbet ve Katılımcı Listesi:**
+   - `rooms/{roomId}/messages` alt koleksiyonu ile anlık mesajlaşma.
+   - `rooms/{roomId}/participants` alt koleksiyonu ile o an odada kimlerin olduğu, mikrofon/kamera durumları ve host yetkileri anlık güncellenir.
+   - Sayfa kapatıldığında veya bağlantı koptuğunda temizleme (heartbeat / presence).
 
-## 2. Kullanıcı Deneyimi ve Arayüz Tasarımı
+4. **WebRTC Ses & Görüntü İletişimi (Firestore Tabanlı Sinyalleşme):**
+   - Karmaşık ve sunucu düşmelerine açık WebSocket relay yerine, Firestore `rooms/{roomId}/signals` alt koleksiyonu üzerinden ICE candidate ve SDP offer/answer değişimi yapılır (Google STUN sunucuları kullanılarak).
+   - Böylece ek bir sunucu bağımlılığı olmaksızın cihazlar doğrudan peer-to-peer bağlanır.
 
-### A. Ayarlanabilir Kamera Düzeni
-- **Boyut Seçici (Kamera Kontrol Çubuğu)**:
-  - *Kompakt (120px)*: Filmi ön plana çıkaran zarif mini kameralar.
-  - *Standart (180px)*: Dengeli sinema ve sohbet modu.
-  - *Geniş (260px)*: Arkadaşların tepkilerini net görmeyi sağlayan büyük pencereler.
-  - *Serbest Boyut Ölçekleyici (Slider)*: %50 ile %150 arasında canlı boyutlandırma.
-- **Konum Seçimi**: Ekranın alt şeridi veya sağ yan paneli arasında geçiş.
-- **Tek Tıkla Gizle / Göster**: Filmde heyecanlı anlarda tek tıkla kameraları tamamen gizleyip tam sahneye geçebilme.
-
-### B. Bas-Konuş (Push-to-Talk) & Ses Kontrolü
-- `[Space]` veya `[V]` tuşuna basılı tutarak anında konuşma, tuş bırakılınca mutlak sessizlik.
-- Ekranda basılı tutulabilen dokunmatik/fare PTT düğmesi.
-- Aktif konuşmacının kamera kutusunda ses dalgası ve renkli sınır ışıması.
-
-### C. Yüksek Kaliteli Ekran Paylaşımı (Netflix & Siteler)
-- `getDisplayMedia` ile 1080p60 akış ve `contentHint: "motion"`.
-- Stereo sistem sesi aktarımı (`echoCancellation: false`, `noiseSuppression: false`).
+5. **Arayüzün Korunması:**
+   - Üst Menü (Header), Sinema Sahnesi (Cinema Stage & Ambient Glow), Video Oynatıcı, Katılımcı Paneli, Sohbet Çekmecesi, Oda Paylaşım Penceresi ve Oda Oluşturma/Katılma modalları aynı kalacak; sadece arkadaki teknik bağlayıcılar (state handlers) temizlenecektir.
 
 ---
 
-## 3. Vercel Dağıtım Mimarisi & Sinyalleşme Stratejisi
+## 2. Adım Adım Uygulama Planı
 
-> [!NOTE]
-> Vercel standart sunucusuz (serverless) fonksiyonlarda kalıcı TCP/WebSocket oturumları 15-60 saniye sonra zaman aşımına uğrayabilir. Bu nedenle platform **hibrit sinyalleşme katmanı** ile tasarlanmıştır:
+### Aşama 1: Veritabanı Modeli ve Güvenlik Kuralları
+- **`firestore.rules` Güncellemesi:**
+  - Tüm cihazların (anonim auth veya misafir oturumu) `rooms`, `participants`, `messages`, `signals`, `reactions` koleksiyonlarına gecikmesiz ve kesintisiz okuma/yazma yapabilmesi sağlanır.
+  - Kurallar `DeployRules` RPC ile deploy edilir.
+- **Veri Tipleri (`src/types.ts`):**
+  - Room, Participant, VideoState, ChatMessage, WebRTCSignal tipleri net ve tip güvenli şekilde güncellenir.
 
-1. **Geliştirme / Cloud Run Modu**: Doğrudan Express + WebSocket (`ws`) sunucusu (düşük gecikmeli yerel test).
-2. **Vercel Dağıtım Modu**:
-   - WebRTC eşler arası doğrudan veri ve medya kanalları (P2P Mesh).
-   - Sinyalleşme için hafif HTTP polling / SSE veya WebRTC bağlantı paylaşımı (Oda token'ı ile anlık el sıkışma).
-   - Proje kökünde `vercel.json` (Vite build çıktısı `dist` ve API yönlendirmeleri).
+### Aşama 2: Çekirdek Servis Katmanının Sıfırlanması
+- **`src/services/firebaseRoomService.ts` (Yeni Temiz Çekirdek):**
+  - `createRoom(name, hostName, password)`: 6 haneli benzersiz kodla oda açma.
+  - `joinRoom(roomId, userName, password)`: Odaya güvenli katılım, şifre doğrulaması.
+  - `subscribeToRoom(roomId, callback)`: Video durumu ve oda ayarlarını anlık dinleme.
+  - `updateVideoState(roomId, videoState)`: Oynat, durdur, ileri/geri sarma, video URL değiştirme.
+  - `subscribeToParticipants(roomId, callback)`: Canlı katılımcı senkronizasyonu.
+  - `sendMessage(roomId, message)` & `subscribeToMessages(roomId, callback)`: Gerçek zamanlı sohbet.
+  - `sendSignal(roomId, signal)` & `subscribeToSignals(roomId, myId, callback)`: WebRTC sinyalleşmesi.
+  - `leaveRoom(roomId, participantId)`: Odadan ayrılma ve temizlik.
 
-### `vercel.json` Yapılandırması:
-```json
-{
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "framework": "vite"
-}
-```
+### Aşama 3: WebRTC Katmanının Firestore Sinyalleşmesine Taşınması
+- **`src/services/webrtcFirestore.ts`:**
+  - WebSocket bağımlılığı kaldırılıp Firestore signals koleksiyonu üzerinden peer bağlantıları yönetilir.
+  - Kamera ve mikrofon açma/kapama, ekran paylaşımı ve ses/görüntü akışları sıfırdan hatasız hale getirilir.
 
----
-
-## 4. Teknik Mimari ve Bileşen Şeması
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        CineSync Full-Stack App                         │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-           ┌────────────────────────┴────────────────────────┐
-           ▼                                                 ▼
-┌───────────────────────┐                         ┌──────────────────────┐
-│  React Frontend UI    │ ◄── Hybrid Signaling ─► │ Node Backend / API   │
-│  - CinemaStage (Sync) │                         │ - Room State         │
-│  - 1080p ScreenShare  │                         │ - WebRTC Signaling   │
-│  - Resizable Camera   │                         │ - E2EE Chat Relay    │
-│  - Push-to-Talk Key   │                         │ - Vercel Serverless  │
-│  - E2EE Chat Panel    │                         │   Ready              │
-└──────────┬────────────┘                         └──────────────────────┘
-           │
-           ▼
-┌───────────────────────┐
-│ WebRTC Peer Mesh      │
-│ - 60fps Motion Video  │
-│ - Stereo System Audio │
-│ - Push-To-Talk Mic    │
-└───────────────────────┘
-```
+### Aşama 4: Arayüz Entegrasyonu (`App.tsx`, `Header.tsx`, `RoomModal.tsx`, `VideoPlayer.tsx`, vb.)
+- UI bileşenlerinin tasarımı bozulmadan:
+  - Eski `socket.ts` bağımlılığı tamamen kaldırılır.
+  - Odanın oluşturulması, başka cihazdan 6 haneli kodla veya doğrudan linkle katılımı kusursuz hale getirilir.
+  - Video oynatıldığında diğer cihazda anında oynaması sağlanır; döngüsel (infinite loop) tetiklenmeler engellenir.
+  - Test ve derleme doğrulaması yapılır.
 
 ---
 
-## 5. Uygulama Adımları
-
-1. **Vercel ve Derleme Yapılandırması**:
-   - `vercel.json` oluşturulması, `package.json` build betiklerinin tam uyumlu hale getirilmesi.
-2. **Kriptografi & Güvenlik (`src/services/crypto.ts`)**:
-   - AES-GCM ve PBKDF2 uçtan uca şifreleme.
-3. **Hibrit Sinyalleşme & WebRTC Motoru (`src/services/webrtc.ts`)**:
-   - P2P mesh kamera, ses ve 1080p60 ekran paylaşımı.
-   - Bas-konuş mantığı ve ses seviyesi analizörü.
-4. **Ayarlanabilir Kamera Şeridi (`src/components/CameraGrid.tsx`)**:
-   - Slider ve hazır boyut butonları (Kompakt, Normal, Geniş).
-   - Konuşmacı vurgusu, bireysel ses seviyesi ayarları, kamerayı simge durumuna küçültme.
-5. **Sinema Sahnesi & Video Senkronizasyonu (`src/components/CinemaStage.tsx`)**:
-   - YouTube IFrame API, doğrudan MP4/video ve yüksek çözünürlüklü ekran yayını.
-   - Oynat/durdur/ileri sar senkronizasyonu ve drift eşitleyici.
-6. **Şifreli Canlı Sohbet Paneli (`src/components/ChatPanel.tsx`)**:
-   - Canlı mesajlaşma ve sinema emoji reaksiyonları.
-7. **İkincil / Tamamlayıcı: Film Öneri & Keşif Modülü**:
-   - İkincil sekme olarak film keşif alanı.
-
----
-
-## 6. Doğrulama ve Kabul Kriterleri
-
-- [ ] **Ayarlanabilir Kameralar**: Kamera boyutları kullanıcı tarafından büyütülüp küçültülebilmeli, kapatılıp açılabilmeli.
-- [ ] **Vercel Uyumluluğu**: Proje `npm run build` ile `dist` klasörüne temiz şekilde derlenebilmeli, Vercel'e atıldığında doğrudan çalışacak yapıda olmalı.
-- [ ] **1080p Kalite**: Sekme ve ekran yayını yüksek çözünürlükte ve bozulmasız iletilmeli.
-- [ ] **Bas-Konuş**: Space/V tuşuyla mikrofon yalnızca basıldığında aktif olmalı.
-- [ ] **Senkronizasyon**: Odadaki tüm kullanıcılar videoyu milisaniyelik uyumla izleyebilmeli.
+## 3. Doğrulama ve Test Kriterleri
+1. **Derleme ve Kod Kalitesi:** `compile_applet` ve `lint_applet` ile sıfır hata doğrulaması.
+2. **Oda Açma Testi:** 1. kullanıcının 6 haneli oda koduyla odayı sorunsuz açabilmesi.
+3. **Farklı Cihazdan Katılım Testi:** 2. kullanıcının doğrudan link (`?room=123456`) veya kod girişi ile odaya hemen dahil olabilmesi.
+4. **Gerçek Zamanlı Senkron:** Video duraklatıldığında veya süre değiştirildiğinde 2. ekranda da anında senkronize olması.
