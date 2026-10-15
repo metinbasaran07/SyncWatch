@@ -50,6 +50,10 @@ class WebRTCManager {
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private animFrameId: number | null = null;
+  private screenAudioSource: MediaStreamAudioSourceNode | null = null;
+  private micAudioSource: MediaStreamAudioSourceNode | null = null;
+  private audioDestination: MediaStreamAudioDestinationNode | null = null;
+  private onScreenShareEnded: (() => void) | null = null;
   private isPushToTalkMode: boolean = false;
   private isPushToTalkActive: boolean = false;
   private currentRoomId: string = '';
@@ -63,6 +67,10 @@ class WebRTCManager {
   public setCallbacks(onStreams: RemoteStreamsChangeCallback, onSpeaking?: SpeakingCallback) {
     this.onRemoteStreamsChange = onStreams;
     if (onSpeaking) this.onSpeakingChanged = onSpeaking;
+  }
+
+  public setOnScreenShareEnded(cb: (() => void) | null) {
+    this.onScreenShareEnded = cb;
   }
 
   public getRemoteStreams(): Map<string, MediaStream> {
@@ -203,15 +211,79 @@ class WebRTCManager {
         videoTrack.contentHint = 'motion';
         videoTrack.onended = () => {
           this.stopScreenShare();
+          if (this.onScreenShareEnded) {
+            this.onScreenShareEnded();
+          }
         };
 
+        // Replace video track on all existing peers
         this.peers.forEach((peer) => {
           const senders = peer.getSenders();
-          const videoSender = senders.find((s) => s.track?.kind === 'video');
+          let videoSender = senders.find((s) => s.track?.kind === 'video');
+          if (!videoSender) {
+            videoSender = senders.find((s) => (s as any).kind === 'video');
+          }
           if (videoSender) {
             videoSender.replaceTrack(videoTrack).catch(() => {});
+          } else {
+            try {
+              peer.addTrack(videoTrack, this.screenStream!);
+            } catch (e) {}
           }
         });
+      }
+
+      // Handle Screen / Tab Audio (e.g. Netflix, YouTube tab audio)
+      const screenAudioTrack = this.screenStream.getAudioTracks()[0];
+      if (screenAudioTrack) {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtxClass) {
+          try {
+            if (!this.audioCtx || this.audioCtx.state === 'closed') {
+              this.audioCtx = new AudioCtxClass();
+            }
+            if (this.audioCtx.state === 'suspended') {
+              this.audioCtx.resume().catch(() => {});
+            }
+
+            const destination = this.audioCtx.createMediaStreamDestination();
+            this.audioDestination = destination;
+
+            const screenSource = this.audioCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+            this.screenAudioSource = screenSource;
+            screenSource.connect(destination);
+
+            // Also connect microphone if present so friends can hear both your voice and the film!
+            if (this.localStream && this.localStream.getAudioTracks().length > 0) {
+              const micTrack = this.localStream.getAudioTracks()[0];
+              if (micTrack) {
+                const micSource = this.audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
+                this.micAudioSource = micSource;
+                micSource.connect(destination);
+              }
+            }
+
+            const mixedAudioTrack = destination.stream.getAudioTracks()[0];
+            if (mixedAudioTrack) {
+              this.peers.forEach((peer) => {
+                const senders = peer.getSenders();
+                const audioSender = senders.find((s) => s.track?.kind === 'audio');
+                if (audioSender) {
+                  audioSender.replaceTrack(mixedAudioTrack).catch(() => {});
+                }
+              });
+            }
+          } catch (audioErr) {
+            console.warn('Audio mixing fallback to raw screen audio track:', audioErr);
+            this.peers.forEach((peer) => {
+              const senders = peer.getSenders();
+              const audioSender = senders.find((s) => s.track?.kind === 'audio');
+              if (audioSender) {
+                audioSender.replaceTrack(screenAudioTrack).catch(() => {});
+              }
+            });
+          }
+        }
       }
 
       if (this.currentRoomId && this.currentUserId) {
@@ -228,22 +300,43 @@ class WebRTCManager {
   }
 
   public stopScreenShare() {
+    if (this.screenAudioSource) {
+      try {
+        this.screenAudioSource.disconnect();
+      } catch (e) {}
+      this.screenAudioSource = null;
+    }
+    if (this.micAudioSource) {
+      try {
+        this.micAudioSource.disconnect();
+      } catch (e) {}
+      this.micAudioSource = null;
+    }
+    this.audioDestination = null;
+
     if (this.screenStream) {
       this.screenStream.getTracks().forEach((track) => track.stop());
       this.screenStream = null;
 
-      if (this.localStream) {
-        const localVideo = this.localStream.getVideoTracks()[0];
+      // Restore camera video track and local mic audio track
+      const localVideo = this.localStream?.getVideoTracks()[0];
+      const localAudio = this.localStream?.getAudioTracks()[0];
+
+      this.peers.forEach((peer) => {
+        const senders = peer.getSenders();
         if (localVideo) {
-          this.peers.forEach((peer) => {
-            const senders = peer.getSenders();
-            const videoSender = senders.find((s) => s.track?.kind === 'video');
-            if (videoSender) {
-              videoSender.replaceTrack(localVideo).catch(() => {});
-            }
-          });
+          const videoSender = senders.find((s) => s.track?.kind === 'video');
+          if (videoSender) {
+            videoSender.replaceTrack(localVideo).catch(() => {});
+          }
         }
-      }
+        if (localAudio) {
+          const audioSender = senders.find((s) => s.track?.kind === 'audio');
+          if (audioSender) {
+            audioSender.replaceTrack(localAudio).catch(() => {});
+          }
+        }
+      });
 
       if (this.currentRoomId && this.currentUserId) {
         firebaseRoomService.updateParticipantState(this.currentRoomId, this.currentUserId, {
@@ -321,15 +414,38 @@ class WebRTCManager {
     const peer = new RTCPeerConnection(ICE_SERVERS);
     this.peers.set(targetUserId, peer);
 
-    if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        try {
-          peer.addTrack(track, this.localStream!);
-        } catch (e) {}
-      });
-    } else {
+    // Attach active tracks (screen share if active, or local webcam/mic)
+    const activeVideoTrack =
+      this.screenStream?.getVideoTracks()[0] || this.localStream?.getVideoTracks()[0];
+    const activeAudioTrack =
+      this.audioDestination?.stream.getAudioTracks()[0] || this.localStream?.getAudioTracks()[0];
+
+    let hasAddedAudio = false;
+    let hasAddedVideo = false;
+
+    if (activeAudioTrack) {
+      try {
+        peer.addTrack(activeAudioTrack, this.localStream || new MediaStream([activeAudioTrack]));
+        hasAddedAudio = true;
+      } catch (e) {}
+    }
+    if (activeVideoTrack) {
+      try {
+        peer.addTrack(
+          activeVideoTrack,
+          this.screenStream || this.localStream || new MediaStream([activeVideoTrack])
+        );
+        hasAddedVideo = true;
+      } catch (e) {}
+    }
+
+    if (!hasAddedAudio) {
       try {
         peer.addTransceiver('audio', { direction: 'sendrecv' });
+      } catch (e) {}
+    }
+    if (!hasAddedVideo) {
+      try {
         peer.addTransceiver('video', { direction: 'sendrecv' });
       } catch (e) {}
     }

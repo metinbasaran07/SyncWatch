@@ -149,9 +149,15 @@ export default function App() {
     };
   }, [isJoined, isPushToTalkMode]);
 
+  const handleStopScreenShareRef = useRef<() => void>(() => {});
+
   // 2. Pure Firebase Real-Time Firestore Synchronization
   useEffect(() => {
     if (!isJoined || !roomId) return;
+
+    webrtc.setOnScreenShareEnded(() => {
+      handleStopScreenShareRef.current();
+    });
 
     webrtc.setCallbacks(
       (streams) => {
@@ -167,10 +173,14 @@ export default function App() {
     const unsubRoom = firebaseRoomService.subscribeToRoom(roomId, (data) => {
       if (!data) return;
       if (data.name) setRoomName(data.name);
-      if (data.video && data.video.sourceUrl) {
+      if (data.video) {
         setVideoState((prev) => {
-          // If updated locally by self in the last 2 seconds, avoid self-jitter
-          if (data.video.updatedBy === userId && prev.sourceUrl === data.video.sourceUrl) {
+          // If updated locally by self in the last 2 seconds, avoid self-jitter unless sourceType changed
+          if (
+            data.video.updatedBy === userId &&
+            prev.sourceType === data.video.sourceType &&
+            prev.sourceUrl === data.video.sourceUrl
+          ) {
             return prev;
           }
           return data.video;
@@ -248,6 +258,7 @@ export default function App() {
     );
 
     return () => {
+      webrtc.setOnScreenShareEnded(null);
       unsubRoom();
       unsubParticipants();
       unsubMessages();
@@ -329,7 +340,7 @@ export default function App() {
 
     if (joinResult.room) {
       if (joinResult.room.name) setRoomName(joinResult.room.name);
-      if (joinResult.room.video && joinResult.room.video.sourceUrl) {
+      if (joinResult.room.video) {
         setVideoState(joinResult.room.video);
       }
     }
@@ -410,13 +421,19 @@ export default function App() {
       setIsSharingScreen(true);
       handleUpdateVideo({
         sourceType: 'screenshare',
-        sourceTitle: `${userName}'in Canlı Sekme / Film Yayını`,
+        sourceTitle: `${userName || 'Kullanıcı'}'in Canlı Sekme / Film Yayını`,
         isPlaying: true,
+        sharingUserId: userId,
       });
+      if (roomId) {
+        firebaseRoomService.updateParticipantState(roomId, userId, {
+          isSharingScreen: true,
+        });
+      }
     }
   };
 
-  const handleStopScreenShare = () => {
+  const handleStopScreenShare = useCallback(() => {
     webrtc.stopScreenShare();
     setScreenStream(null);
     setIsSharingScreen(false);
@@ -425,8 +442,16 @@ export default function App() {
       sourceUrl: '',
       sourceTitle: 'İçerik Bekleniyor',
       isPlaying: false,
+      sharingUserId: '',
     });
-  };
+    if (roomId) {
+      firebaseRoomService.updateParticipantState(roomId, userId, {
+        isSharingScreen: false,
+      });
+    }
+  }, [roomId, userId]);
+
+  handleStopScreenShareRef.current = handleStopScreenShare;
 
   const handleTogglePushToTalkMode = (enabled: boolean) => {
     setIsPushToTalkMode(enabled);
@@ -674,7 +699,7 @@ export default function App() {
                 reactions={reactions}
                 onTriggerReaction={handleTriggerReaction}
                 onOpenDiscovery={() => setActiveTab('discovery')}
-                users={users}
+                users={users.map((u) => (u.id === userId ? { ...u, isSharingScreen } : u))}
                 localStream={localStream}
                 remoteStreams={remoteStreams}
                 currentUserId={userId}
@@ -682,17 +707,23 @@ export default function App() {
               />
 
               <CameraGrid
-                users={users.length > 0 ? users : [{
-                  id: userId,
-                  name: userName || 'Sen',
-                  avatarColor: userColor,
-                  isHost,
-                  hasCamera,
-                  hasMic,
-                  isSpeaking,
-                  isSharingScreen,
-                  joinedAt: Date.now(),
-                }]}
+                users={
+                  users.length > 0
+                    ? users.map((u) => (u.id === userId ? { ...u, isSharingScreen } : u))
+                    : [
+                        {
+                          id: userId,
+                          name: userName || 'Sen',
+                          avatarColor: userColor,
+                          isHost,
+                          hasCamera,
+                          hasMic,
+                          isSpeaking,
+                          isSharingScreen,
+                          joinedAt: Date.now(),
+                        },
+                      ]
+                }
                 currentUserId={userId}
                 localStream={localStream}
                 remoteStreams={remoteStreams}
@@ -706,6 +737,8 @@ export default function App() {
                 onToggleMic={handleToggleMic}
                 isSpeaking={isSpeaking}
                 speakingVolume={speakingVolume}
+                videoState={videoState}
+                isSharingScreen={isSharingScreen}
               />
             </div>
 

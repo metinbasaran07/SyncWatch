@@ -10,6 +10,7 @@ export interface VideoState {
   lastUpdated: number;
   updatedBy: string;
   playbackRate: number;
+  sharingUserId?: string;
 }
 
 export interface RoomUser {
