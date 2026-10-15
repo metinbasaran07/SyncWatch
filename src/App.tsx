@@ -86,6 +86,29 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'cinema' | 'discovery' | 'settings'>('cinema');
 
   const isPttKeyDownRef = useRef<boolean>(false);
+  const userJoinedAtRef = useRef<number>(Date.now());
+
+  // Calculates whether current user entered the room first compared to otherUser.
+  // The person who entered the room first ("odaya ilk giren kişi") initiates the handshake with all users!
+  const checkIfInitiator = useCallback(
+    (otherUser: RoomUser): boolean => {
+      const myJoinedAt = userJoinedAtRef.current;
+      const otherJoinedAt = otherUser.joinedAt || 0;
+
+      // 1. Primary rule: the user who joined earlier (smaller timestamp) initiates the handshake
+      if (myJoinedAt && otherJoinedAt && myJoinedAt !== otherJoinedAt) {
+        return myJoinedAt < otherJoinedAt;
+      }
+
+      // 2. Room host is by definition the room creator / first user
+      if (isHost && !otherUser.isHost) return true;
+      if (!isHost && otherUser.isHost) return false;
+
+      // 3. Fallback deterministic tie-breaker
+      return userId < otherUser.id;
+    },
+    [userId, isHost]
+  );
 
   // 1. Push-To-Talk Keyboard Listener (Space or V)
   useEffect(() => {
@@ -151,10 +174,15 @@ export default function App() {
       }
       if (data.users && Array.isArray(data.users)) {
         setUsers(data.users);
+        const me = data.users.find((u: RoomUser) => u.id === userId);
+        if (me?.joinedAt) {
+          userJoinedAtRef.current = me.joinedAt;
+        }
+
         data.users.forEach((otherUser: RoomUser) => {
           if (otherUser.id !== userId) {
-            // Deterministic initiator to eliminate WebRTC offer collision
-            const isInitiator = userId > otherUser.id;
+            // The person who entered the room first automatically initiates the handshake
+            const isInitiator = checkIfInitiator(otherUser);
             webrtc.createPeer(otherUser.id, isInitiator);
           }
         });
@@ -166,9 +194,14 @@ export default function App() {
     const unsubUsersUpdated = socket.on('room:users_updated', ({ data }) => {
       if (Array.isArray(data)) {
         setUsers(data);
+        const me = data.find((u: RoomUser) => u.id === userId);
+        if (me?.joinedAt) {
+          userJoinedAtRef.current = me.joinedAt;
+        }
+
         data.forEach((otherUser: RoomUser) => {
           if (otherUser.id !== userId) {
-            const isInitiator = userId > otherUser.id;
+            const isInitiator = checkIfInitiator(otherUser);
             webrtc.createPeer(otherUser.id, isInitiator);
           }
         });
@@ -177,11 +210,17 @@ export default function App() {
 
     // B. User Joined
     const unsubUserJoined = socket.on('user:joined', ({ data }) => {
-      if (data?.allUsers) {
+      if (data?.allUsers && Array.isArray(data.allUsers)) {
         setUsers(data.allUsers);
+        const me = data.allUsers.find((u: RoomUser) => u.id === userId);
+        if (me?.joinedAt) {
+          userJoinedAtRef.current = me.joinedAt;
+        }
       }
       if (data?.user && data.user.id !== userId) {
-        const isInitiator = userId > data.user.id;
+        // Current user was already in the room; the newcomer data.user just joined.
+        // Current user entered first ("odaya ilk giren kişi") and initiates the automatic handshake!
+        const isInitiator = checkIfInitiator(data.user);
         webrtc.createPeer(data.user.id, isInitiator);
 
         setMessages((prev) => [
@@ -389,6 +428,8 @@ export default function App() {
     } catch (e) {
       console.warn('Initial media race skipped or failed:', e);
     }
+
+    userJoinedAtRef.current = Date.now();
 
     // Initialize socket connection immediately
     socket.init(targetRoom, userId, name, randomColor, asHost);

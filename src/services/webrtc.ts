@@ -240,17 +240,42 @@ class WebRTCManager {
   // --- WebRTC Peer Mesh Signaling Implementation ---
   public async createPeer(targetUserId: string, isInitiator: boolean): Promise<RTCPeerConnection> {
     if (this.peers.has(targetUserId)) {
-      return this.peers.get(targetUserId)!;
+      const existingPeer = this.peers.get(targetUserId)!;
+      if (existingPeer.connectionState === 'closed' || existingPeer.connectionState === 'failed') {
+        this.removePeer(targetUserId);
+      } else {
+        if (isInitiator && !existingPeer.localDescription && existingPeer.signalingState === 'stable') {
+          try {
+            const offer = await existingPeer.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true,
+            });
+            await existingPeer.setLocalDescription(offer);
+            socket.sendSignal('offer', offer, targetUserId);
+          } catch (err) {
+            console.error('Error creating WebRTC offer on existing peer:', err);
+          }
+        }
+        return existingPeer;
+      }
     }
 
     const peer = new RTCPeerConnection(ICE_SERVERS);
     this.peers.set(targetUserId, peer);
 
-    // Add local tracks to peer
+    // Add local tracks to peer if available
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
-        peer.addTrack(track, this.localStream!);
+        try {
+          peer.addTrack(track, this.localStream!);
+        } catch (e) {}
       });
+    } else {
+      // Add transceivers so offer negotiates bidirectional audio/video
+      try {
+        peer.addTransceiver('audio', { direction: 'sendrecv' });
+        peer.addTransceiver('video', { direction: 'sendrecv' });
+      } catch (e) {}
     }
 
     // Handle incoming remote media tracks
