@@ -8,6 +8,7 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
+  Volume2,
 } from 'lucide-react';
 import { RoomUser } from '../types';
 
@@ -39,6 +40,15 @@ const RemoteUserTile: React.FC<{
 }> = ({ user, stream, cardWidth, cardHeight }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
+  const tryPlayAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.play()
+        .then(() => setAudioBlocked(false))
+        .catch(() => setAudioBlocked(true));
+    }
+  };
 
   useEffect(() => {
     if (stream) {
@@ -47,7 +57,12 @@ const RemoteUserTile: React.FC<{
       }
       if (audioRef.current) {
         audioRef.current.srcObject = stream;
-        audioRef.current.play().catch(() => {});
+        audioRef.current.play()
+          .then(() => setAudioBlocked(false))
+          .catch((e) => {
+            console.warn('Remote audio autoplay blocked by mobile browser policy:', e);
+            setAudioBlocked(true);
+          });
       }
     }
   }, [stream]);
@@ -65,6 +80,18 @@ const RemoteUserTile: React.FC<{
     >
       {/* Remote Audio Track Player (so sound plays through speakers) */}
       <audio ref={audioRef} autoPlay playsInline />
+
+      {/* Mobile Autoplay Audio Unlock button */}
+      {audioBlocked && (
+        <button
+          onClick={tryPlayAudio}
+          className="absolute top-2 left-2 z-20 flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[10px] shadow-lg animate-pulse cursor-pointer"
+          title="Mobil tarayıcınız sesi engelledi. Sesi duymak için dokunun."
+        >
+          <Volume2 className="w-3 h-3" />
+          <span>Sesi Aç</span>
+        </button>
+      )}
 
       {hasVideo ? (
         <video

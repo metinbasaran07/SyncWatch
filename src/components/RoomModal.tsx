@@ -36,9 +36,14 @@ export const RoomModal: React.FC<RoomModalProps> = ({
   initialPassword = '',
   onJoinRoom,
 }) => {
-  const [userName, setUserName] = useState('');
+  const [userName, setUserName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('cinesync_userName') || '';
+    }
+    return '';
+  });
   const [customRoomId, setCustomRoomId] = useState('');
-  const [joinRoomId, setJoinRoomId] = useState(initialRoomId || '');
+  const [joinRoomId, setJoinRoomId] = useState(initialRoomId ? initialRoomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') : '');
   const [password, setPassword] = useState(initialPassword);
   const [isCreatingNew, setIsCreatingNew] = useState(!initialRoomId);
   const [activeRooms, setActiveRooms] = useState<ActiveRoomItem[]>([]);
@@ -62,7 +67,8 @@ export const RoomModal: React.FC<RoomModalProps> = ({
 
   useEffect(() => {
     if (initialRoomId) {
-      setJoinRoomId(initialRoomId.trim().toLowerCase());
+      const clean = initialRoomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      setJoinRoomId(clean);
       setIsCreatingNew(false);
     }
     if (initialPassword) {
@@ -95,7 +101,7 @@ export const RoomModal: React.FC<RoomModalProps> = ({
   }, []);
 
   const handleSelectActiveRoom = (room: ActiveRoomItem) => {
-    setJoinRoomId(room.id);
+    setJoinRoomId(room.id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''));
     setIsCreatingNew(false);
   };
 
@@ -107,11 +113,15 @@ export const RoomModal: React.FC<RoomModalProps> = ({
     e.preventDefault();
     if (!userName.trim()) return;
 
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cinesync_userName', userName.trim());
+    }
+
     let targetRoom = '';
     if (isCreatingNew) {
-      targetRoom = (customRoomId.trim() || generateRandomRoomId()).toLowerCase();
+      targetRoom = (customRoomId.trim() || generateRandomRoomId()).toLowerCase().replace(/[^a-z0-9_-]/g, '');
     } else {
-      targetRoom = (joinRoomId.trim() || initialRoomId.trim()).toLowerCase();
+      targetRoom = (joinRoomId.trim() || initialRoomId.trim()).toLowerCase().replace(/[^a-z0-9_-]/g, '');
     }
 
     if (!targetRoom) return;

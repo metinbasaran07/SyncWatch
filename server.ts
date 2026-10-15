@@ -91,11 +91,64 @@ interface RoomData {
   activeVote?: any;
 }
 
+const DATA_DIR = path.join(__dirname, '.data');
+const DATA_FILE = path.join(DATA_DIR, 'rooms_store.json');
+
 const rooms = new Map<string, RoomData>();
 const wsClientMap = new Map<WebSocket, { userId: string; roomId: string; userName: string }>();
 
+let saveTimer: NodeJS.Timeout | null = null;
+function scheduleSaveRooms() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const serialized: Record<string, any> = {};
+      for (const [id, r] of rooms.entries()) {
+        serialized[id] = {
+          id: r.id,
+          name: r.name,
+          hostId: r.hostId,
+          password: r.password,
+          hasPassword: r.hasPassword,
+          video: r.video,
+          users: Array.from(r.users.entries()),
+          events: r.events.slice(-60),
+          nextEventSeq: r.nextEventSeq,
+          activeVote: r.activeVote,
+        };
+      }
+      fs.writeFileSync(DATA_FILE, JSON.stringify(serialized, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('[Storage] Error persisting rooms:', e);
+    }
+  }, 1000);
+}
+
+function loadRoomsFromDisk() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+      for (const [id, r] of Object.entries(data) as [string, any][]) {
+        rooms.set(id, {
+          ...r,
+          users: new Map(r.users || []),
+          events: r.events || [],
+        });
+      }
+      console.log(`[Storage] Restored ${rooms.size} active rooms from persistent disk storage.`);
+    }
+  } catch (e) {
+    console.warn('[Storage] Could not load persisted rooms:', e);
+  }
+}
+loadRoomsFromDisk();
+
 function getOrCreateRoom(roomId: string, hostName?: string, hostId?: string): RoomData {
-  const normId = roomId.trim().toLowerCase();
+  const normId = roomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
   if (!rooms.has(normId)) {
     rooms.set(normId, {
       id: normId,
@@ -118,6 +171,7 @@ function getOrCreateRoom(roomId: string, hostName?: string, hostId?: string): Ro
       events: [],
       nextEventSeq: 1,
     });
+    scheduleSaveRooms();
   }
   return rooms.get(normId)!;
 }
@@ -207,6 +261,7 @@ function dispatchRoomEvent(
 
   // Broadcast to all active WebSocket connections for this room
   broadcastToWebSocketClients(normId, roomEvent, excludeWs);
+  scheduleSaveRooms();
 
   return roomEvent;
 }
@@ -305,6 +360,7 @@ function touchUser(
     });
   }
 
+  scheduleSaveRooms();
   return userRecord;
 }
 

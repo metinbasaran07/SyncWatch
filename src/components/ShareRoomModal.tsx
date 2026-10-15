@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, Copy, Check, ShieldCheck, Lock, Share2, Link as LinkIcon, KeyRound, Unlock, Save } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Copy, Check, ShieldCheck, Lock, Share2, Link as LinkIcon, KeyRound, Unlock, Save, QrCode, Smartphone } from 'lucide-react';
+import QRCode from 'qrcode';
 
 interface ShareRoomModalProps {
   isOpen: boolean;
@@ -26,12 +27,27 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [newPasswordInput, setNewPasswordInput] = useState(password);
   const [passwordSavedNotice, setPasswordSavedNotice] = useState(false);
-
-  if (!isOpen) return null;
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  const [showQrCode, setShowQrCode] = useState<boolean>(true);
 
   const roomLink = typeof window !== 'undefined'
     ? `${window.location.origin}/?room=${encodeURIComponent(roomId)}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
     : `https://cinesync.app/?room=${roomId}`;
+
+  useEffect(() => {
+    if (isOpen && roomLink) {
+      QRCode.toDataURL(roomLink, {
+        width: 220,
+        margin: 1.5,
+        color: {
+          dark: '#0f172a',
+          light: '#ffffff',
+        },
+      })
+        .then((url) => setQrCodeUrl(url))
+        .catch((err) => console.error('QR code generation failed:', err));
+    }
+  }, [isOpen, roomLink]);
 
   const copyTextToClipboard = async (text: string) => {
     try {
@@ -169,6 +185,53 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
                 )}
               </button>
             </div>
+          </div>
+
+          {/* QR CODE FOR INSTANT MOBILE CONNECT */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-slate-400 tracking-wider flex items-center gap-1.5">
+                <QrCode className="w-3.5 h-3.5 text-rose-400" />
+                <span>KAREKOD İLE DİĞER CİHAZDAN / TELEFONDAN KATIL</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowQrCode(!showQrCode)}
+                className="text-[10px] text-slate-400 hover:text-white underline"
+              >
+                {showQrCode ? 'Gizle' : 'Göster'}
+              </button>
+            </div>
+
+            {showQrCode && (
+              <div className="flex flex-col sm:flex-row items-center gap-3.5 pt-1">
+                {qrCodeUrl ? (
+                  <div className="p-2 bg-white rounded-xl shadow-md shrink-0">
+                    <img
+                      src={qrCodeUrl}
+                      alt="Oda Bağlantısı Karekod"
+                      className="w-28 h-28 sm:w-32 sm:h-32 object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0">
+                    <span className="text-[10px] text-slate-500">Karekod hazırlanıyor...</span>
+                  </div>
+                )}
+                <div className="flex flex-col gap-1 text-center sm:text-left">
+                  <div className="flex items-center justify-center sm:justify-start gap-1.5 text-xs font-bold text-white">
+                    <Smartphone className="w-4 h-4 text-rose-400" />
+                    <span>Telefon Kamerasıyla Taratın</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Telefonunuzun kamerasını karekoda tutun; tarayıcınız tam olarak aynı sunucu ve odaya otomatik bağlanacaktır.
+                  </p>
+                  <span className="text-[10px] text-emerald-400 font-medium mt-0.5">
+                    ✓ Aynı ağda olmasanız bile (4G/5G dahil) TURN üzerinden bağlanır.
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 3. HOST PASSWORD MANAGEMENT (Odayı kuran kişi şifreyi değiştirebilsin) */}
