@@ -67,27 +67,11 @@ const RemoteUserTile: React.FC<{
     }
   }, [stream]);
 
-  // A remote user tile should ONLY display camera video, never the Netflix / tab screen share
-  const isScreenTrack = (s?: MediaStream) => {
-    if (!s) return false;
-    const vTrack = s.getVideoTracks()[0];
-    if (!vTrack) return false;
-    return (
-      vTrack.contentHint === 'motion' ||
-      vTrack.label.toLowerCase().includes('screen') ||
-      vTrack.label.toLowerCase().includes('display') ||
-      vTrack.label.toLowerCase().includes('tab') ||
-      (s.id && s.id.toLowerCase().includes('screen'))
-    );
-  };
-
-  const hasVideo = Boolean(
-    stream &&
-    stream.getVideoTracks().length > 0 &&
-    stream.getVideoTracks()[0].enabled &&
-    !isScreenTrack(stream) &&
-    (!user.isSharingScreen || user.hasCamera)
-  );
+  // User has video if stream has a live video track and user is NOT sharing their screen
+  // (Screen shares are routed exclusively to the main CinemaStage player)
+  const vTrack = stream?.getVideoTracks()[0];
+  const hasLiveVideoTrack = Boolean(vTrack && vTrack.enabled && vTrack.readyState === 'live');
+  const hasVideo = Boolean(hasLiveVideoTrack && !user.isSharingScreen);
 
   return (
     <div
@@ -99,7 +83,19 @@ const RemoteUserTile: React.FC<{
       style={{ width: `${cardWidth}px`, height: `${cardHeight}px` }}
     >
       {/* Remote Audio Track Player (so sound plays through speakers) */}
-      <audio ref={audioRef} autoPlay playsInline />
+      <audio
+        ref={(el) => {
+          audioRef.current = el;
+          if (el && stream && el.srcObject !== stream) {
+            el.srcObject = stream;
+            el.play()
+              .then(() => setAudioBlocked(false))
+              .catch(() => setAudioBlocked(true));
+          }
+        }}
+        autoPlay
+        playsInline
+      />
 
       {/* Mobile Autoplay Audio Unlock button */}
       {audioBlocked && (
@@ -113,15 +109,23 @@ const RemoteUserTile: React.FC<{
         </button>
       )}
 
-      {hasVideo ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <div className="flex flex-col items-center justify-center gap-1 p-2 text-center">
+      {/* Video element is permanently mounted to never lose srcObject attachment */}
+      <video
+        ref={(el) => {
+          videoRef.current = el;
+          if (el && stream && el.srcObject !== stream) {
+            el.srcObject = stream;
+            el.play().catch(() => {});
+          }
+        }}
+        autoPlay
+        playsInline
+        className={`w-full h-full object-cover ${hasVideo ? 'block' : 'hidden'}`}
+      />
+
+      {/* Fallback avatar shown when camera is off or user is sharing screen */}
+      {!hasVideo && (
+        <div className="flex flex-col items-center justify-center gap-1.5 p-2 text-center">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-sm"
             style={{ backgroundColor: user.avatarColor || '#3b82f6' }}
@@ -129,12 +133,12 @@ const RemoteUserTile: React.FC<{
             {user.name.substring(0, 2).toUpperCase()}
           </div>
           {user.isSharingScreen ? (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60 font-semibold truncate max-w-[90%]">
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-rose-600/90 text-white font-semibold shadow-sm">
               📺 Film Yayında
             </span>
           ) : (
             <span className="text-[10px] text-slate-400">
-              {user.hasCamera ? 'Kamera Başlatılıyor' : 'Ses Bağlantısı'}
+              {user.hasCamera || hasLiveVideoTrack ? 'Kamera Açılıyor...' : 'Kamera Kapalı'}
             </span>
           )}
         </div>

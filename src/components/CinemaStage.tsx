@@ -27,7 +27,6 @@ interface CinemaStageProps {
   onUpdateVideo: (update: Partial<VideoState>) => void;
   isHost: boolean;
   screenStream: MediaStream | null;
-  remoteScreenStreams?: Map<string, MediaStream>;
   onStartScreenShare: () => Promise<void>;
   onStopScreenShare: () => void;
   isSharingScreen: boolean;
@@ -53,7 +52,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   onUpdateVideo,
   isHost,
   screenStream,
-  remoteScreenStreams = new Map(),
   onStartScreenShare,
   onStopScreenShare,
   isSharingScreen,
@@ -280,27 +278,16 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     }
     // If a remote peer is sharing screen (Netflix/tab)
     if (sharingUser) {
-      const remoteScreen = remoteScreenStreams.get(sharingUser.id);
-      if (remoteScreen && remoteScreen.getVideoTracks().length > 0) {
-        return remoteScreen;
-      }
-      // Check remoteStreams in case peer sent it through primary stream
-      const remoteGeneral = remoteStreams.get(sharingUser.id);
-      if (remoteGeneral && remoteGeneral.getVideoTracks().length > 0) {
-        return remoteGeneral;
-      }
-    }
-    // Fallback: any available remote screen stream from any participant
-    for (const stream of remoteScreenStreams.values()) {
-      if (stream.getVideoTracks().length > 0) {
+      const stream = remoteStreams.get(sharingUser.id);
+      if (stream && stream.getVideoTracks().length > 0) {
         return stream;
       }
     }
     // Fallback: if videoState says screenshare and another user updated it
-    if (videoState.sourceType === 'screenshare' && videoState.updatedBy) {
-      const updaterStream = remoteScreenStreams.get(videoState.updatedBy) || remoteStreams.get(videoState.updatedBy);
-      if (updaterStream && updaterStream.getVideoTracks().length > 0) {
-        return updaterStream;
+    if (videoState.sourceType === 'screenshare' && videoState.updatedBy && videoState.updatedBy !== currentUserId) {
+      const stream = remoteStreams.get(videoState.updatedBy);
+      if (stream && stream.getVideoTracks().length > 0) {
+        return stream;
       }
     }
     return null;
@@ -636,19 +623,18 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                   key={user.id}
                   className="relative w-36 h-24 sm:w-40 sm:h-28 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center shrink-0"
                 >
-                  {hasRemoteVideo ? (
-                    <video
-                      ref={(el) => {
-                        if (el && remoteStream) {
-                          el.srcObject = remoteStream;
-                          el.play().catch(() => {});
-                        }
-                      }}
-                      autoPlay
-                      playsInline
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
+                  <video
+                    ref={(el) => {
+                      if (el && remoteStream && el.srcObject !== remoteStream) {
+                        el.srcObject = remoteStream;
+                        el.play().catch(() => {});
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    className={`w-full h-full object-cover ${hasRemoteVideo ? 'block' : 'hidden'}`}
+                  />
+                  {!hasRemoteVideo && (
                     <div className="flex flex-col items-center justify-center text-[10px] text-slate-400 p-2 text-center">
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white mb-1 shadow-sm"
