@@ -72,6 +72,7 @@ export default function App() {
   // WebRTC Camera & Mic State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
   const [hasCamera, setHasCamera] = useState<boolean>(false);
   const [hasMic, setHasMic] = useState<boolean>(true);
   const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false);
@@ -160,6 +161,9 @@ export default function App() {
       (speaking, vol) => {
         setIsSpeaking(speaking);
         setSpeakingVolume(vol);
+      },
+      (screenStreams) => {
+        setRemoteScreenStreams(new Map(screenStreams));
       }
     );
 
@@ -294,16 +298,12 @@ export default function App() {
     webrtc.init(cleanRoom, userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
-    let initialHasCam = false;
-    let initialHasMic = true;
     try {
       const stream = await webrtc.startLocalMedia(true, true);
       if (stream) {
         setLocalStream(stream);
-        initialHasCam = stream.getVideoTracks().length > 0;
-        initialHasMic = stream.getAudioTracks().length > 0;
-        setHasCamera(initialHasCam);
-        setHasMic(initialHasMic);
+        setHasCamera(stream.getVideoTracks().length > 0);
+        setHasMic(stream.getAudioTracks().length > 0);
       }
     } catch (e) {
       console.warn('Local media acquire skipped:', e);
@@ -319,8 +319,8 @@ export default function App() {
         name,
         avatarColor: randomColor,
         isHost: asHost,
-        hasCamera: initialHasCam,
-        hasMic: initialHasMic,
+        hasCamera: hasCamera,
+        hasMic: hasMic,
       },
       password
     );
@@ -386,6 +386,7 @@ export default function App() {
     setUsers([]);
     setMessages([]);
     setRemoteStreams(new Map());
+    setRemoteScreenStreams(new Map());
     const url = new URL(window.location.href);
     url.searchParams.delete('room');
     url.searchParams.delete('pwd');
@@ -672,6 +673,7 @@ export default function App() {
                 onUpdateVideo={handleUpdateVideo}
                 isHost={isHost}
                 screenStream={screenStream}
+                remoteScreenStreams={remoteScreenStreams}
                 onStartScreenShare={handleStartScreenShare}
                 onStopScreenShare={handleStopScreenShare}
                 isSharingScreen={isSharingScreen}
