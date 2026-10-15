@@ -22,6 +22,7 @@ export interface RoomUser {
   isSpeaking: boolean;
   isSharingScreen: boolean;
   joinedAt: number;
+  lastSeen?: number;
 }
 
 export interface ChatMessage {

@@ -42,8 +42,12 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const isAisDev = origin.includes('ais-dev-');
+  const publicOrigin = isAisDev ? origin.replace('ais-dev-', 'ais-pre-') : origin;
+
   const roomLink = typeof window !== 'undefined' && roomId
-    ? `${window.location.origin}/?room=${encodeURIComponent(roomId)}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
+    ? `${publicOrigin}/?room=${encodeURIComponent(roomId)}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
     : typeof window !== 'undefined'
     ? window.location.href
     : `https://cinesync.app/?room=${roomId}`;
@@ -257,6 +261,9 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
                   </p>
                   <span className="text-[10px] text-emerald-400 font-medium mt-0.5">
                     ✓ Aynı ağda olmasanız bile (4G/5G dahil) TURN üzerinden bağlanır.
+                  </span>
+                  <span className="text-[10px] text-sky-400 font-medium mt-0.5">
+                    ✓ Firebase Bulut Eşzamanlama aktif: Tüm cihazlar ve ağlar arası canlı senkronizasyon.
                   </span>
                 </div>
               </div>

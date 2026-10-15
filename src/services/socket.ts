@@ -1,4 +1,5 @@
 import { RoomState, VideoState, ChatMessage, EmojiReaction, RoomUser } from '../types';
+import { firebaseSync } from './firebase';
 
 type MessageHandler = (payload: { data: any; senderId?: string; event?: string }) => void;
 
@@ -60,6 +61,30 @@ class SocketClient {
 
     // 4. Start reliable background synchronization polling
     this.startAdaptiveSyncLoop();
+
+    // 5. Connect Firebase Firestore Realtime synchronization (guarantees cross-device & cross-network reachability)
+    firebaseSync.joinRoom(
+      this.roomId,
+      {
+        id: this.userId,
+        name: this.userName,
+        avatarColor: this.userColor,
+        isHost: this.isHost,
+        hasCamera: false,
+        hasMic: true,
+      },
+      undefined,
+      undefined,
+      (roomState: any) => {
+        this.handleIncomingEvent('room:state', roomState, 'firebase');
+      },
+      (users: RoomUser[]) => {
+        this.handleIncomingEvent('room:users_updated', users, 'firebase');
+      },
+      (type: string, data: any, senderId: string) => {
+        this.handleIncomingEvent(type, data, senderId);
+      }
+    );
   }
 
   private handleIncomingEvent(type: string, data: any, senderId?: string, msgId?: string) {
@@ -299,6 +324,16 @@ class SocketClient {
     if (!sentViaWs || isCriticalState) {
       this.performHttpSync('poll', enriched);
     }
+
+    // 4. Replicate to Firebase Firestore for cross-device & cross-network delivery
+    try {
+      firebaseSync.sendEvent(enriched.type, enriched.data !== undefined ? enriched.data : enriched, enriched.targetId);
+      if (enriched.type === 'sync:video' && enriched.data) {
+        firebaseSync.syncVideo(enriched.data);
+      } else if (enriched.type === 'user:state_update' && enriched.data) {
+        firebaseSync.updateUserState(enriched.data);
+      }
+    } catch (e) {}
   }
 
   public sendSignal(type: 'offer' | 'answer' | 'candidate', data: any, targetId: string) {
@@ -353,6 +388,7 @@ class SocketClient {
   }
 
   public disconnect() {
+    firebaseSync.leaveRoom();
     if (this.syncPollTimer) clearTimeout(this.syncPollTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

@@ -14,6 +14,8 @@ import {
   Play,
   KeyRound
 } from 'lucide-react';
+import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { db } from '../services/firebase';
 
 interface ActiveRoomItem {
   id: string;
@@ -76,7 +78,7 @@ export const RoomModal: React.FC<RoomModalProps> = ({
     }
   }, [initialRoomId, initialPassword]);
 
-  // Fetch active rooms on mount and periodic refresh
+  // Fetch active rooms on mount and periodic refresh (merging local API and Firebase Firestore)
   const fetchActiveRooms = async () => {
     try {
       setIsLoadingRooms(true);
@@ -87,6 +89,38 @@ export const RoomModal: React.FC<RoomModalProps> = ({
           setActiveRooms(data.rooms);
         }
       }
+
+      // Also query Firebase Firestore so any device/instance can see active rooms
+      try {
+        const roomsCol = collection(db, 'rooms');
+        const q = query(roomsCol, orderBy('updatedAt', 'desc'), limit(15));
+        const snap = await getDocs(q);
+        const fbRooms: ActiveRoomItem[] = [];
+        const now = Date.now();
+        snap.forEach((docSnap) => {
+          const r = docSnap.data();
+          // Filter out rooms not touched in the last 6 hours
+          if (r.id && (!r.updatedAt || now - r.updatedAt < 21600000)) {
+            fbRooms.push({
+              id: r.id,
+              name: r.name || `Oda #${r.id}`,
+              userCount: 1,
+              hasPassword: Boolean(r.hasPassword),
+              hostName: 'Oda Sahibi',
+              currentVideo: r.video?.sourceTitle || 'İçerik',
+              users: [],
+            });
+          }
+        });
+        if (fbRooms.length > 0) {
+          setActiveRooms((prev) => {
+            const map = new Map<string, ActiveRoomItem>();
+            fbRooms.forEach(item => map.set(item.id.toLowerCase(), item));
+            prev.forEach(item => map.set(item.id.toLowerCase(), item));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {}
     } catch (e) {
       // Ignore background fetch error
     } finally {

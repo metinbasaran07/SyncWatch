@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && isValidId(roomId)
+        && request.resource.data.id == roomId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.hostId is string
+        && request.resource.data.hasPassword is bool;
+      allow update: if isSignedIn()
+        && isValidId(roomId);
+      allow delete: if isSignedIn()
+        && isValidId(roomId)
+        && (resource.data.hostId == request.auth.uid || request.auth.uid == roomId);
+
+      match /users/{userId} {
+        allow read: if true;
+        allow create, update: if isSignedIn()
+          && isValidId(roomId)
+          && isValidId(userId)
+          && request.resource.data.id == userId
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 80;
+        allow delete: if isSignedIn()
+          && isValidId(roomId)
+          && isValidId(userId);
+      }
+
+      match /events/{eventId} {
+        allow read: if true;
+        allow create: if isSignedIn()
+          && isValidId(roomId)
+          && isValidId(eventId)
+          && request.resource.data.roomId == roomId
+          && request.resource.data.type is string
+          && request.resource.data.senderId is string;
+        allow update, delete: if false;
+      }
+    }
+  }
+}

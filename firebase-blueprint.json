@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "Watch party room state including media playback and host controls",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique room code identifier" },
+        "name": { "type": "string", "description": "Display name of the room" },
+        "hostId": { "type": "string", "description": "ID of current room host" },
+        "hasPassword": { "type": "boolean", "description": "Whether room requires a password" },
+        "password": { "type": "string", "description": "Optional room password hash or string" },
+        "video": {
+          "type": "object",
+          "description": "Synchronized video player state",
+          "properties": {
+            "sourceType": { "type": "string", "enum": ["youtube", "direct", "screenshare"] },
+            "sourceUrl": { "type": "string" },
+            "sourceTitle": { "type": "string" },
+            "isPlaying": { "type": "boolean" },
+            "currentTime": { "type": "number" },
+            "duration": { "type": "number" },
+            "lastUpdated": { "type": "number" },
+            "updatedBy": { "type": "string" },
+            "playbackRate": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "number", "description": "Room creation timestamp" },
+        "updatedAt": { "type": "number", "description": "Last activity timestamp" }
+      },
+      "required": ["id", "name", "hostId", "hasPassword", "createdAt", "updatedAt"]
+    },
+    "RoomUser": {
+      "title": "RoomUser",
+      "description": "Participant in a watch party room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User identifier" },
+        "name": { "type": "string", "description": "Display nickname" },
+        "avatarColor": { "type": "string", "description": "Hex avatar color" },
+        "isHost": { "type": "boolean", "description": "Whether user is room host" },
+        "hasCamera": { "type": "boolean", "description": "Whether camera stream is active" },
+        "hasMic": { "type": "boolean", "description": "Whether microphone stream is active" },
+        "isSpeaking": { "type": "boolean", "description": "Speaking activity state" },
+        "isSharingScreen": { "type": "boolean", "description": "Screen sharing state" },
+        "joinedAt": { "type": "number", "description": "Join timestamp" },
+        "lastSeen": { "type": "number", "description": "Last heartbeat timestamp" }
+      },
+      "required": ["id", "name", "isHost", "joinedAt", "lastSeen"]
+    },
+    "RoomEvent": {
+      "title": "RoomEvent",
+      "description": "Real-time event for chat, reactions and WebRTC signaling",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique event id" },
+        "type": { "type": "string", "description": "Event type e.g. chat, signal, sync" },
+        "roomId": { "type": "string", "description": "Target room id" },
+        "senderId": { "type": "string", "description": "Sender user ID" },
+        "targetId": { "type": "string", "description": "Optional target user ID for P2P signaling" },
+        "data": { "type": "string", "description": "JSON serialized payload data" },
+        "timestamp": { "type": "number", "description": "Timestamp event was dispatched" }
+      },
+      "required": ["id", "type", "roomId", "senderId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Active watch party rooms with synchronization state"
+    },
+    "/rooms/{roomId}/users/{userId}": {
+      "schema": "RoomUser",
+      "description": "Participants currently inside the room"
+    },
+    "/rooms/{roomId}/events/{eventId}": {
+      "schema": "RoomEvent",
+      "description": "Real-time signaling and chat events log"
+    }
+  }
+}
