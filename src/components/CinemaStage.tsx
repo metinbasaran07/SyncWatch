@@ -27,6 +27,7 @@ interface CinemaStageProps {
   onUpdateVideo: (update: Partial<VideoState>) => void;
   isHost: boolean;
   screenStream: MediaStream | null;
+  remoteScreenStreams?: Map<string, MediaStream>;
   onStartScreenShare: () => Promise<void>;
   onStopScreenShare: () => void;
   isSharingScreen: boolean;
@@ -52,6 +53,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   onUpdateVideo,
   isHost,
   screenStream,
+  remoteScreenStreams = new Map(),
   onStartScreenShare,
   onStopScreenShare,
   isSharingScreen,
@@ -66,6 +68,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
 }) => {
   const [volume, setVolume] = useState<number>(0.9);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [screenAudioBlocked, setScreenAudioBlocked] = useState<boolean>(false);
   const [playbackTime, setPlaybackTime] = useState<number>(videoState.currentTime || 0);
   const [duration, setDuration] = useState<number>(videoState.duration || 600);
   const [showSourceModal, setShowSourceModal] = useState<boolean>(false);
@@ -77,7 +80,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [isControlsVisible, setIsControlsVisible] = useState<boolean>(true);
   const [showFullscreenCameras, setShowFullscreenCameras] = useState<boolean>(true);
   const [fullscreenCameraPosition, setFullscreenCameraPosition] = useState<'bottom' | 'right'>('bottom');
-  const [isAudioBlocked, setIsAudioBlocked] = useState<boolean>(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const htmlVideoRef = useRef<HTMLVideoElement>(null);
@@ -268,76 +270,85 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     }, 200);
   }, [videoState.isPlaying, videoState.currentTime, videoState.sourceType]);
 
-  // Determine which stream should play in CinemaStage when sourceType is 'screenshare'
-  const activeScreenShareStream = React.useMemo(() => {
-    if (videoState.sourceType !== 'screenshare') return null;
+  // 4. Resolve Active Screen Share Stream (Local or Remote from other participant)
+  const sharingUser = users.find((u) => u.isSharingScreen && u.id !== currentUserId);
 
-    // 1. If local user is the screen sharer
+  const getActiveScreenStream = (): MediaStream | null => {
+    // If local user is currently sharing screen
     if (isSharingScreen && screenStream) {
       return screenStream;
     }
-
-    // 2. Specific user identified by sharingUserId
-    if (videoState.sharingUserId) {
-      if (videoState.sharingUserId === currentUserId && screenStream) {
-        return screenStream;
+    // If a remote peer is sharing screen (Netflix/tab)
+    if (sharingUser) {
+      const remoteScreen = remoteScreenStreams.get(sharingUser.id);
+      if (remoteScreen && remoteScreen.getVideoTracks().length > 0) {
+        return remoteScreen;
       }
-      if (remoteStreams.has(videoState.sharingUserId)) {
-        return remoteStreams.get(videoState.sharingUserId) || null;
+      // Check remoteStreams in case peer sent it through primary stream
+      const remoteGeneral = remoteStreams.get(sharingUser.id);
+      if (remoteGeneral && remoteGeneral.getVideoTracks().length > 0) {
+        return remoteGeneral;
       }
     }
-
-    // 3. Any remote user who has isSharingScreen = true
-    const sharingUser = users.find((u) => u.isSharingScreen && u.id !== currentUserId);
-    if (sharingUser && remoteStreams.has(sharingUser.id)) {
-      return remoteStreams.get(sharingUser.id) || null;
+    // Fallback: any available remote screen stream from any participant
+    for (const stream of remoteScreenStreams.values()) {
+      if (stream.getVideoTracks().length > 0) {
+        return stream;
+      }
     }
-
-    // 4. Fallback for 2-person watch party: single remote stream if not self-sharing
-    if (!isSharingScreen && remoteStreams.size === 1) {
-      return Array.from(remoteStreams.values())[0] || null;
+    // Fallback: if videoState says screenshare and another user updated it
+    if (videoState.sourceType === 'screenshare' && videoState.updatedBy) {
+      const updaterStream = remoteScreenStreams.get(videoState.updatedBy) || remoteStreams.get(videoState.updatedBy);
+      if (updaterStream && updaterStream.getVideoTracks().length > 0) {
+        return updaterStream;
+      }
     }
-
-    // 5. Any remote stream if sourceType is screenshare and not self-sharing
-    if (!isSharingScreen && remoteStreams.size > 0) {
-      return Array.from(remoteStreams.values())[0] || null;
-    }
-
     return null;
-  }, [
-    videoState.sourceType,
-    videoState.sharingUserId,
-    isSharingScreen,
-    screenStream,
-    users,
-    currentUserId,
-    remoteStreams,
-  ]);
+  };
 
-  // 4. Bind Screen Share Video Stream
+  const activeScreenStream = getActiveScreenStream();
+
   useEffect(() => {
     if (videoState.sourceType === 'screenshare' && screenVideoRef.current) {
-      if (activeScreenShareStream) {
-        if (screenVideoRef.current.srcObject !== activeScreenShareStream) {
-          screenVideoRef.current.srcObject = activeScreenShareStream;
+      const vid = screenVideoRef.current;
+      if (activeScreenStream) {
+        if (vid.srcObject !== activeScreenStream) {
+          vid.srcObject = activeScreenStream;
         }
-        // Sharer is muted locally to prevent echo.
-        // Viewers are unmuted so they hear Netflix / shared tab audio!
-        screenVideoRef.current.muted = isSharingScreen || isMuted;
-        screenVideoRef.current.volume = isMuted ? 0 : volume;
 
-        screenVideoRef.current
-          .play()
-          .then(() => setIsAudioBlocked(false))
+        // Avoid echo on the sharing device; un-mute on receiving devices
+        if (isSharingScreen) {
+          vid.muted = true;
+          vid.volume = 0;
+        } else {
+          vid.muted = isMuted;
+          vid.volume = volume;
+        }
+
+        vid.play()
+          .then(() => setScreenAudioBlocked(false))
           .catch((err) => {
-            console.warn('Cinema screen video autoplay caught:', err);
-            if (!isSharingScreen && !isMuted) {
-              setIsAudioBlocked(true);
+            console.warn('Screen share video play policy:', err);
+            if (!isSharingScreen) {
+              setScreenAudioBlocked(true);
             }
           });
       }
     }
-  }, [videoState.sourceType, activeScreenShareStream, isSharingScreen, isMuted, volume]);
+  }, [videoState.sourceType, activeScreenStream, isSharingScreen, isMuted, volume]);
+
+  const handleUnlockScreenAudio = () => {
+    if (screenVideoRef.current) {
+      screenVideoRef.current.muted = false;
+      screenVideoRef.current.volume = volume;
+      screenVideoRef.current.play()
+        .then(() => {
+          setScreenAudioBlocked(false);
+          setIsMuted(false);
+        })
+        .catch(() => {});
+    }
+  };
 
   // 5. Time ticker for progress bar
   useEffect(() => {
@@ -612,32 +623,20 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             .filter((u) => u.id !== currentUserId)
             .map((user) => {
               const remoteStream = remoteStreams.get(user.id);
-              const isUserSharingScreen =
-                user.isSharingScreen ||
-                (videoState.sourceType === 'screenshare' &&
-                  (videoState.sharingUserId === user.id ||
-                    (!videoState.sharingUserId && users.length <= 2)));
-              const hasRemoteVideo =
-                !isUserSharingScreen &&
-                Boolean(remoteStream && remoteStream.getVideoTracks().length > 0 && remoteStream.getVideoTracks()[0].enabled);
+              // Ensure screen shares are never rendered inside this small camera tile
+              const hasRemoteVideo = Boolean(
+                remoteStream &&
+                remoteStream.getVideoTracks().length > 0 &&
+                remoteStream.getVideoTracks()[0].enabled &&
+                !user.isSharingScreen
+              );
 
               return (
                 <div
                   key={user.id}
                   className="relative w-36 h-24 sm:w-40 sm:h-28 bg-slate-950 rounded-lg overflow-hidden border border-slate-700 flex items-center justify-center shrink-0"
                 >
-                  {isUserSharingScreen ? (
-                    <div className="flex flex-col items-center justify-center text-[10px] text-slate-400 p-2 text-center">
-                      <div
-                        className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white mb-1 shadow-sm ring-1 ring-rose-500"
-                        style={{ backgroundColor: user.avatarColor || '#e11d48' }}
-                      >
-                        {user.name.substring(0, 2).toUpperCase()}
-                      </div>
-                      <span className="text-[9px] text-rose-400 font-semibold">Ekran Paylaşıyor</span>
-                      <span className="truncate max-w-[100px] text-[8px] text-slate-400">{user.name}</span>
-                    </div>
-                  ) : hasRemoteVideo ? (
+                  {hasRemoteVideo ? (
                     <video
                       ref={(el) => {
                         if (el && remoteStream) {
@@ -658,6 +657,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                         {user.name.substring(0, 2).toUpperCase()}
                       </div>
                       <span className="truncate max-w-[100px]">{user.name}</span>
+                      {user.isSharingScreen && (
+                        <span className="text-[9px] text-emerald-400 font-semibold mt-0.5">Ekran Paylaşıyor</span>
+                      )}
                     </div>
                   )}
                   <div className="absolute bottom-1 left-1 bg-black/70 text-[9px] px-1.5 py-0.5 rounded text-white truncate max-w-[100px] font-medium">
@@ -733,49 +735,31 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           <>
             {videoState.sourceType === 'screenshare' && (
               <div className="relative w-full h-full flex items-center justify-center bg-black">
-                {activeScreenShareStream ? (
-                  <>
-                    <video
-                      ref={screenVideoRef}
-                      autoPlay
-                      playsInline
-                      muted={isSharingScreen || isMuted}
-                      className="w-full h-full object-contain bg-black"
-                    />
-                    {/* Audio Unlock Button for Mobile / Strict Autoplay policies */}
-                    {isAudioBlocked && !isSharingScreen && (
-                      <div className="absolute top-4 left-4 z-30">
-                        <button
-                          onClick={() => {
-                            if (screenVideoRef.current) {
-                              screenVideoRef.current.muted = false;
-                              screenVideoRef.current.volume = volume;
-                              screenVideoRef.current
-                                .play()
-                                .then(() => setIsAudioBlocked(false))
-                                .catch(() => {});
-                            }
-                          }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-xl animate-pulse cursor-pointer border border-rose-400/40"
-                          title="Yayının sesini dinlemek için tıklayın"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                          <span>Sesi Aç (Yayın Sesi)</span>
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center justify-center p-6 text-center text-slate-400">
-                    <Radio className="w-10 h-10 text-rose-500 animate-pulse mb-3" />
-                    <h4 className="text-base font-bold text-white mb-1">
-                      Canlı Ekran Yayını Başlatıldı
-                    </h4>
-                    <p className="text-xs text-slate-400 max-w-sm">
-                      {isSharingScreen
-                        ? 'Ekran akışınız hazırlanıyor...'
-                        : 'Yayıncının ekran akışı bekleniyor, lütfen bekleyin...'}
-                    </p>
+                <video
+                  ref={screenVideoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
+                />
+
+                {/* If audio autoplay was blocked by browser, provide 1-click sound unlock */}
+                {screenAudioBlocked && (
+                  <button
+                    onClick={handleUnlockScreenAudio}
+                    className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-xl animate-pulse cursor-pointer border border-rose-400 transition-all hover:scale-105"
+                    title="Mobil veya masaüstü tarayıcınız sesi engelledi. Sesi duymak için dokunun."
+                  >
+                    <Volume2 className="w-4 h-4" />
+                    <span>Film Sesini Açmak İçin Dokunun</span>
+                  </button>
+                )}
+
+                {/* Waiting indicator if stream is initializing */}
+                {!activeScreenStream && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4 bg-slate-950/80">
+                    <Radio className="w-10 h-10 text-rose-500 animate-pulse mb-2" />
+                    <span className="text-sm font-semibold text-white">Canlı Yayın Bekleniyor</span>
+                    <span className="text-xs text-slate-400 mt-1">Ekran görüntüsü ve ses akışı bağlanıyor...</span>
                   </div>
                 )}
               </div>
@@ -924,15 +908,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {(videoState.sourceType === 'direct' ||
-              (videoState.sourceType === 'screenshare' && !isSharingScreen)) && (
+            {(videoState.sourceType === 'direct' || videoState.sourceType === 'screenshare') && (
               <div className="hidden sm:flex items-center gap-2 group/vol">
                 <button
                   onClick={() => {
                     const nextMute = !isMuted;
                     setIsMuted(nextMute);
                     if (htmlVideoRef.current) htmlVideoRef.current.muted = nextMute;
-                    if (screenVideoRef.current) screenVideoRef.current.muted = nextMute;
+                    if (screenVideoRef.current && !isSharingScreen) screenVideoRef.current.muted = nextMute;
                   }}
                   className="text-slate-400 hover:text-white transition-colors"
                   title={isMuted ? 'Sesi Aç' : 'Sesi Kapat'}
@@ -953,12 +936,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                       htmlVideoRef.current.volume = val;
                       htmlVideoRef.current.muted = false;
                     }
-                    if (screenVideoRef.current) {
+                    if (screenVideoRef.current && !isSharingScreen) {
                       screenVideoRef.current.volume = val;
                       screenVideoRef.current.muted = false;
                     }
                   }}
-                  className="w-14 sm:w-16 h-1 bg-slate-800 rounded accent-slate-300"
+                  className="w-14 sm:w-16 h-1 bg-slate-800 rounded accent-rose-500 cursor-pointer"
+                  title={`Ses Seviyesi: ${Math.round(volume * 100)}%`}
                 />
               </div>
             )}

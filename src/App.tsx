@@ -72,6 +72,7 @@ export default function App() {
   // WebRTC Camera & Mic State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
   const [hasCamera, setHasCamera] = useState<boolean>(false);
   const [hasMic, setHasMic] = useState<boolean>(true);
   const [isPushToTalkMode, setIsPushToTalkMode] = useState<boolean>(false);
@@ -149,15 +150,9 @@ export default function App() {
     };
   }, [isJoined, isPushToTalkMode]);
 
-  const handleStopScreenShareRef = useRef<() => void>(() => {});
-
   // 2. Pure Firebase Real-Time Firestore Synchronization
   useEffect(() => {
     if (!isJoined || !roomId) return;
-
-    webrtc.setOnScreenShareEnded(() => {
-      handleStopScreenShareRef.current();
-    });
 
     webrtc.setCallbacks(
       (streams) => {
@@ -166,6 +161,9 @@ export default function App() {
       (speaking, vol) => {
         setIsSpeaking(speaking);
         setSpeakingVolume(vol);
+      },
+      (screenStreams) => {
+        setRemoteScreenStreams(new Map(screenStreams));
       }
     );
 
@@ -173,14 +171,10 @@ export default function App() {
     const unsubRoom = firebaseRoomService.subscribeToRoom(roomId, (data) => {
       if (!data) return;
       if (data.name) setRoomName(data.name);
-      if (data.video) {
+      if (data.video && data.video.sourceUrl) {
         setVideoState((prev) => {
-          // If updated locally by self in the last 2 seconds, avoid self-jitter unless sourceType changed
-          if (
-            data.video.updatedBy === userId &&
-            prev.sourceType === data.video.sourceType &&
-            prev.sourceUrl === data.video.sourceUrl
-          ) {
+          // If updated locally by self in the last 2 seconds, avoid self-jitter
+          if (data.video.updatedBy === userId && prev.sourceUrl === data.video.sourceUrl) {
             return prev;
           }
           return data.video;
@@ -258,7 +252,6 @@ export default function App() {
     );
 
     return () => {
-      webrtc.setOnScreenShareEnded(null);
       unsubRoom();
       unsubParticipants();
       unsubMessages();
@@ -340,7 +333,7 @@ export default function App() {
 
     if (joinResult.room) {
       if (joinResult.room.name) setRoomName(joinResult.room.name);
-      if (joinResult.room.video) {
+      if (joinResult.room.video && joinResult.room.video.sourceUrl) {
         setVideoState(joinResult.room.video);
       }
     }
@@ -393,6 +386,7 @@ export default function App() {
     setUsers([]);
     setMessages([]);
     setRemoteStreams(new Map());
+    setRemoteScreenStreams(new Map());
     const url = new URL(window.location.href);
     url.searchParams.delete('room');
     url.searchParams.delete('pwd');
@@ -421,19 +415,13 @@ export default function App() {
       setIsSharingScreen(true);
       handleUpdateVideo({
         sourceType: 'screenshare',
-        sourceTitle: `${userName || 'Kullanıcı'}'in Canlı Sekme / Film Yayını`,
+        sourceTitle: `${userName}'in Canlı Sekme / Film Yayını`,
         isPlaying: true,
-        sharingUserId: userId,
       });
-      if (roomId) {
-        firebaseRoomService.updateParticipantState(roomId, userId, {
-          isSharingScreen: true,
-        });
-      }
     }
   };
 
-  const handleStopScreenShare = useCallback(() => {
+  const handleStopScreenShare = () => {
     webrtc.stopScreenShare();
     setScreenStream(null);
     setIsSharingScreen(false);
@@ -442,16 +430,8 @@ export default function App() {
       sourceUrl: '',
       sourceTitle: 'İçerik Bekleniyor',
       isPlaying: false,
-      sharingUserId: '',
     });
-    if (roomId) {
-      firebaseRoomService.updateParticipantState(roomId, userId, {
-        isSharingScreen: false,
-      });
-    }
-  }, [roomId, userId]);
-
-  handleStopScreenShareRef.current = handleStopScreenShare;
+  };
 
   const handleTogglePushToTalkMode = (enabled: boolean) => {
     setIsPushToTalkMode(enabled);
@@ -693,13 +673,14 @@ export default function App() {
                 onUpdateVideo={handleUpdateVideo}
                 isHost={isHost}
                 screenStream={screenStream}
+                remoteScreenStreams={remoteScreenStreams}
                 onStartScreenShare={handleStartScreenShare}
                 onStopScreenShare={handleStopScreenShare}
                 isSharingScreen={isSharingScreen}
                 reactions={reactions}
                 onTriggerReaction={handleTriggerReaction}
                 onOpenDiscovery={() => setActiveTab('discovery')}
-                users={users.map((u) => (u.id === userId ? { ...u, isSharingScreen } : u))}
+                users={users}
                 localStream={localStream}
                 remoteStreams={remoteStreams}
                 currentUserId={userId}
@@ -707,23 +688,17 @@ export default function App() {
               />
 
               <CameraGrid
-                users={
-                  users.length > 0
-                    ? users.map((u) => (u.id === userId ? { ...u, isSharingScreen } : u))
-                    : [
-                        {
-                          id: userId,
-                          name: userName || 'Sen',
-                          avatarColor: userColor,
-                          isHost,
-                          hasCamera,
-                          hasMic,
-                          isSpeaking,
-                          isSharingScreen,
-                          joinedAt: Date.now(),
-                        },
-                      ]
-                }
+                users={users.length > 0 ? users : [{
+                  id: userId,
+                  name: userName || 'Sen',
+                  avatarColor: userColor,
+                  isHost,
+                  hasCamera,
+                  hasMic,
+                  isSpeaking,
+                  isSharingScreen,
+                  joinedAt: Date.now(),
+                }]}
                 currentUserId={userId}
                 localStream={localStream}
                 remoteStreams={remoteStreams}
@@ -737,8 +712,6 @@ export default function App() {
                 onToggleMic={handleToggleMic}
                 isSpeaking={isSpeaking}
                 speakingVolume={speakingVolume}
-                videoState={videoState}
-                isSharingScreen={isSharingScreen}
               />
             </div>
 

@@ -10,7 +10,7 @@ import {
   ChevronUp,
   Volume2,
 } from 'lucide-react';
-import { RoomUser, VideoState } from '../types';
+import { RoomUser } from '../types';
 
 interface CameraGridProps {
   users: RoomUser[];
@@ -27,8 +27,6 @@ interface CameraGridProps {
   onToggleMic: () => void;
   isSpeaking: boolean;
   speakingVolume: number;
-  videoState?: VideoState;
-  isSharingScreen?: boolean;
 }
 
 export type CameraSizePreset = 'compact' | 'normal' | 'large';
@@ -39,14 +37,13 @@ const RemoteUserTile: React.FC<{
   stream?: MediaStream;
   cardWidth: number;
   cardHeight: number;
-  isStreamingToCinema?: boolean;
-}> = ({ user, stream, cardWidth, cardHeight, isStreamingToCinema = false }) => {
+}> = ({ user, stream, cardWidth, cardHeight }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
 
   const tryPlayAudio = () => {
-    if (audioRef.current && !isStreamingToCinema) {
+    if (audioRef.current) {
       audioRef.current.play()
         .then(() => setAudioBlocked(false))
         .catch(() => setAudioBlocked(true));
@@ -59,41 +56,53 @@ const RemoteUserTile: React.FC<{
         videoRef.current.srcObject = stream;
       }
       if (audioRef.current) {
-        // If this user's stream is already playing in the CinemaStage, mute audio in camera tile
-        // to prevent double sound / echo
-        audioRef.current.muted = isStreamingToCinema;
-        if (!isStreamingToCinema) {
-          audioRef.current.srcObject = stream;
-          audioRef.current.play()
-            .then(() => setAudioBlocked(false))
-            .catch((e) => {
-              console.warn('Remote audio autoplay blocked by mobile browser policy:', e);
-              setAudioBlocked(true);
-            });
-        }
+        audioRef.current.srcObject = stream;
+        audioRef.current.play()
+          .then(() => setAudioBlocked(false))
+          .catch((e) => {
+            console.warn('Remote audio autoplay blocked by mobile browser policy:', e);
+            setAudioBlocked(true);
+          });
       }
     }
-  }, [stream, isStreamingToCinema]);
+  }, [stream]);
 
-  // When user is streaming their screen to the main cinema stage, do NOT show the screen in the face camera card
-  const hasVideo = !isStreamingToCinema && Boolean(stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled);
+  // A remote user tile should ONLY display camera video, never the Netflix / tab screen share
+  const isScreenTrack = (s?: MediaStream) => {
+    if (!s) return false;
+    const vTrack = s.getVideoTracks()[0];
+    if (!vTrack) return false;
+    return (
+      vTrack.contentHint === 'motion' ||
+      vTrack.label.toLowerCase().includes('screen') ||
+      vTrack.label.toLowerCase().includes('display') ||
+      vTrack.label.toLowerCase().includes('tab') ||
+      (s.id && s.id.toLowerCase().includes('screen'))
+    );
+  };
+
+  const hasVideo = Boolean(
+    stream &&
+    stream.getVideoTracks().length > 0 &&
+    stream.getVideoTracks()[0].enabled &&
+    !isScreenTrack(stream) &&
+    (!user.isSharingScreen || user.hasCamera)
+  );
 
   return (
     <div
       className={`relative rounded-lg overflow-hidden bg-slate-950 border transition-all shrink-0 flex flex-col items-center justify-center ${
         user.isSpeaking
           ? 'border-emerald-500 shadow-md shadow-emerald-950/40 ring-2 ring-emerald-500/50'
-          : isStreamingToCinema
-          ? 'border-rose-500/80 shadow-md shadow-rose-950/30'
           : 'border-slate-800'
       }`}
       style={{ width: `${cardWidth}px`, height: `${cardHeight}px` }}
     >
-      {/* Remote Audio Track Player (so sound plays through speakers when not in cinema) */}
-      <audio ref={audioRef} autoPlay playsInline muted={isStreamingToCinema} />
+      {/* Remote Audio Track Player (so sound plays through speakers) */}
+      <audio ref={audioRef} autoPlay playsInline />
 
       {/* Mobile Autoplay Audio Unlock button */}
-      {audioBlocked && !isStreamingToCinema && (
+      {audioBlocked && (
         <button
           onClick={tryPlayAudio}
           className="absolute top-2 left-2 z-20 flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[10px] shadow-lg animate-pulse cursor-pointer"
@@ -104,23 +113,7 @@ const RemoteUserTile: React.FC<{
         </button>
       )}
 
-      {isStreamingToCinema ? (
-        <div className="flex flex-col items-center justify-center gap-1.5 p-2 text-center select-none">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-md ring-2 ring-rose-500/80"
-            style={{ backgroundColor: user.avatarColor || '#e11d48' }}
-          >
-            {user.name.substring(0, 2).toUpperCase()}
-          </div>
-          <div className="flex items-center gap-1 bg-rose-950/90 border border-rose-500/50 px-2 py-0.5 rounded-full text-[10px] text-rose-300 font-semibold animate-pulse shadow-sm">
-            <Radio className="w-2.5 h-2.5 text-rose-400" />
-            <span>Ekran Paylaşıyor</span>
-          </div>
-          <span className="text-[9px] text-slate-400">
-            Yayını Ana Sahnede İzleyin
-          </span>
-        </div>
-      ) : hasVideo ? (
+      {hasVideo ? (
         <video
           ref={videoRef}
           autoPlay
@@ -128,16 +121,22 @@ const RemoteUserTile: React.FC<{
           className="w-full h-full object-cover"
         />
       ) : (
-        <div className="flex flex-col items-center justify-center gap-1.5">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 text-center">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-sm"
             style={{ backgroundColor: user.avatarColor || '#3b82f6' }}
           >
             {user.name.substring(0, 2).toUpperCase()}
           </div>
-          <span className="text-[10px] text-slate-400">
-            {user.hasCamera ? 'Kamera Başlatılıyor' : 'Ses Bağlantısı'}
-          </span>
+          {user.isSharingScreen ? (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60 font-semibold truncate max-w-[90%]">
+              📺 Film Yayında
+            </span>
+          ) : (
+            <span className="text-[10px] text-slate-400">
+              {user.hasCamera ? 'Kamera Başlatılıyor' : 'Ses Bağlantısı'}
+            </span>
+          )}
         </div>
       )}
 
@@ -178,8 +177,6 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
   onToggleMic,
   isSpeaking,
   speakingVolume,
-  videoState,
-  isSharingScreen = false,
 }) => {
   const [sizePreset, setSizePreset] = useState<CameraSizePreset>('normal');
   const [customScale, setCustomScale] = useState<number>(100);
@@ -328,20 +325,10 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
             className={`relative rounded-lg overflow-hidden bg-slate-950 border transition-all shrink-0 flex flex-col items-center justify-center ${
               isSpeaking || isPushToTalkActive
                 ? 'border-rose-500 shadow-md shadow-rose-950/40 ring-2 ring-rose-500/50'
-                : isSharingScreen
-                ? 'border-emerald-500/80 shadow-md shadow-emerald-950/30'
                 : 'border-slate-800'
             }`}
             style={{ width: `${cardWidth}px`, height: `${cardHeight}px` }}
           >
-            {/* Local Screen Sharing Badge */}
-            {isSharingScreen && (
-              <div className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-emerald-600/90 text-white px-1.5 py-0.5 rounded text-[9px] font-semibold shadow-sm animate-pulse">
-                <Radio className="w-2.5 h-2.5" />
-                <span>Sekme Paylaşılıyor</span>
-              </div>
-            )}
-
             {hasCamera && localStream && localStream.getVideoTracks().length > 0 ? (
               <video
                 ref={localVideoRef}
@@ -386,24 +373,15 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
           {/* 2. Remote Room Participants Camera Cards */}
           {users
             .filter((u) => u.id !== currentUserId)
-            .map((user) => {
-              const isStreamingToCinema =
-                user.isSharingScreen ||
-                (videoState?.sourceType === 'screenshare' &&
-                  (videoState.sharingUserId === user.id ||
-                    (!videoState.sharingUserId && users.length <= 2)));
-
-              return (
-                <RemoteUserTile
-                  key={user.id}
-                  user={user}
-                  stream={remoteStreams.get(user.id)}
-                  cardWidth={cardWidth}
-                  cardHeight={cardHeight}
-                  isStreamingToCinema={isStreamingToCinema}
-                />
-              );
-            })}
+            .map((user) => (
+              <RemoteUserTile
+                key={user.id}
+                user={user}
+                stream={remoteStreams.get(user.id)}
+                cardWidth={cardWidth}
+                cardHeight={cardHeight}
+              />
+            ))}
         </div>
       )}
 
