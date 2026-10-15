@@ -466,6 +466,23 @@ export default function App() {
     socket.updatePassword(newPassword.trim());
   };
 
+  // Leave room and return to room creation/join screen
+  const handleLeaveRoom = () => {
+    socket.disconnect();
+    webrtc.cleanup();
+    setIsJoined(false);
+    setRoomId('');
+    setRoomPassword('');
+    setIsShareModalOpen(false);
+    setUsers([]);
+    setMessages([]);
+    setRemoteStreams(new Map());
+    const url = new URL(window.location.href);
+    url.searchParams.delete('room');
+    url.searchParams.delete('pwd');
+    window.history.replaceState({}, '', url.pathname);
+  };
+
   // Video State Update
   const handleUpdateVideo = (update: Partial<VideoState>) => {
     const nextState = {
@@ -655,16 +672,18 @@ export default function App() {
       )}
 
       {/* 2. Share Room Modal with Host Password Management */}
-      <ShareRoomModal
-        isOpen={isShareModalOpen}
-        onClose={() => setIsShareModalOpen(false)}
-        roomId={roomId}
-        roomName={roomName}
-        hasPassword={Boolean(cryptoKey || roomPassword)}
-        password={roomPassword}
-        isHost={isHost}
-        onUpdatePassword={handleHostUpdatePassword}
-      />
+      {isShareModalOpen && (
+        <ShareRoomModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          roomId={roomId}
+          roomName={roomName}
+          hasPassword={Boolean(cryptoKey || roomPassword)}
+          password={roomPassword}
+          isHost={isHost}
+          onUpdatePassword={handleHostUpdatePassword}
+        />
+      )}
 
       {/* 3. Top Bar Navigation with Chat Toggle */}
       <Header
@@ -675,6 +694,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onShareRoom={() => setIsShareModalOpen(true)}
+        onLeaveRoom={handleLeaveRoom}
         isChatOpen={isChatOpen}
         onToggleChat={() => setIsChatOpen(!isChatOpen)}
       />

@@ -170,19 +170,28 @@ export const RoomModal: React.FC<RoomModalProps> = ({
 
         {/* Invited via link banner */}
         {initialRoomId && !isCreatingNew && (
-          <div className="mb-4 p-2.5 rounded-xl bg-rose-950/40 border border-rose-800/60 flex items-center justify-between gap-2.5">
+          <div className="mb-4 p-2.5 rounded-xl bg-rose-950/40 border border-rose-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-7 rounded-lg bg-rose-600/20 text-rose-400 flex items-center justify-center shrink-0">
                 <UserCheck className="w-4 h-4" />
               </div>
               <div className="text-xs">
-                <span className="text-slate-300">Davet edildiğiniz oda: </span>
+                <span className="text-slate-300">Davet bağlantısıyla geldiniz: </span>
                 <strong className="text-rose-400 font-mono font-bold">#{initialRoomId}</strong>
               </div>
             </div>
-            <span className="text-[10px] text-emerald-400 font-medium bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-md">
-              Hazır
-            </span>
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setIsCreatingNew(true)}
+                className="text-[11px] text-slate-400 hover:text-rose-300 underline underline-offset-2"
+              >
+                Kendi odamı oluştur
+              </button>
+              <span className="text-[10px] text-emerald-400 font-medium bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-md">
+                Katılmaya Hazır
+              </span>
+            </div>
           </div>
         )}
 
@@ -253,25 +262,25 @@ export const RoomModal: React.FC<RoomModalProps> = ({
           </div>
         )}
 
-        {/* Tab: Yeni Oda vs Odaya Katıl */}
+        {/* Tab: Yeni Oda Oluştur vs Odaya Katıl */}
         <div className="flex items-center gap-1.5 p-1 bg-slate-900 rounded-lg mb-4 border border-slate-800">
           <button
             type="button"
             onClick={() => setIsCreatingNew(true)}
-            className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-              isCreatingNew ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-1.5 ${
+              isCreatingNew ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
             }`}
           >
-            Yeni Oda Kur
+            <span>✨ Yeni Oda Oluştur</span>
           </button>
           <button
             type="button"
             onClick={() => setIsCreatingNew(false)}
-            className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-              !isCreatingNew ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-1.5 ${
+              !isCreatingNew ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
             }`}
           >
-            Odaya Katıl
+            <span>🔗 Odaya Katıl</span>
           </button>
         </div>
 

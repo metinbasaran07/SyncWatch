@@ -1,5 +1,5 @@
 import React from 'react';
-import { Film, Share2, Lock, ShieldCheck, Users, MessageSquare, Sparkles, Settings } from 'lucide-react';
+import { Film, Share2, Lock, ShieldCheck, Users, MessageSquare, Sparkles, Settings, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   roomId: string;
@@ -9,6 +9,7 @@ interface HeaderProps {
   activeTab: 'cinema' | 'discovery' | 'settings';
   setActiveTab: (tab: 'cinema' | 'discovery' | 'settings') => void;
   onShareRoom: () => void;
+  onLeaveRoom?: () => void;
   isCopied?: boolean;
   isChatOpen: boolean;
   onToggleChat: () => void;
@@ -22,6 +23,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   onShareRoom,
+  onLeaveRoom,
   isChatOpen,
   onToggleChat,
 }) => {
@@ -125,6 +127,17 @@ export const Header: React.FC<HeaderProps> = ({
           <Share2 className="w-3.5 h-3.5" />
           <span>Paylaş</span>
         </button>
+
+        {onLeaveRoom && (
+          <button
+            onClick={onLeaveRoom}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            title="Odadan Ayrıl ve Yeni Oda Kur / Katıl"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Odadan Ayrıl</span>
+          </button>
+        )}
       </div>
     </header>
   );

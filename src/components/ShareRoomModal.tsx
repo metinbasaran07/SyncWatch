@@ -30,12 +30,26 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [showQrCode, setShowQrCode] = useState<boolean>(true);
 
-  const roomLink = typeof window !== 'undefined'
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  const roomLink = typeof window !== 'undefined' && roomId
     ? `${window.location.origin}/?room=${encodeURIComponent(roomId)}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
+    : typeof window !== 'undefined'
+    ? window.location.href
     : `https://cinesync.app/?room=${roomId}`;
 
   useEffect(() => {
-    if (isOpen && roomLink) {
+    if (isOpen && roomLink && roomId) {
       QRCode.toDataURL(roomLink, {
         width: 220,
         margin: 1.5,
@@ -47,7 +61,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
         .then((url) => setQrCodeUrl(url))
         .catch((err) => console.error('QR code generation failed:', err));
     }
-  }, [isOpen, roomLink]);
+  }, [isOpen, roomLink, roomId]);
 
   const copyTextToClipboard = async (text: string) => {
     try {
@@ -74,12 +88,14 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   };
 
   const handleCopyCode = async () => {
+    if (!roomId) return;
     await copyTextToClipboard(roomId);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
   const handleCopyLink = async () => {
+    if (!roomLink) return;
     await copyTextToClipboard(roomLink);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
@@ -103,11 +119,24 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
     }
   };
 
+  // CRITICAL: If modal is not open, render nothing!
+  if (!isOpen) {
+    return null;
+  }
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-      <div className="bg-[#0f172a] border border-slate-700/80 rounded-2xl p-5 sm:p-6 w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-[#0f172a] border border-slate-700/80 rounded-2xl p-5 sm:p-6 w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           onClick={onClose}
+          type="button"
+          aria-label="Kapat"
           className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
         >
           <X className="w-5 h-5" />
