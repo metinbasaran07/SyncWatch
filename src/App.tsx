@@ -10,7 +10,7 @@ import { RoomState, RoomUser, VideoState, ChatMessage, EmojiReaction, MovieSugge
 import { socket } from './services/socket';
 import { webrtc } from './services/webrtc';
 import { deriveKeyFromPassword, encryptMessage, decryptMessage } from './services/crypto';
-import { MessageSquare, ShieldCheck } from 'lucide-react';
+import { MessageSquare, ShieldCheck, Film, Sparkles } from 'lucide-react';
 
 const AVATAR_COLORS = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#db2777', '#0891b2'];
 
@@ -40,7 +40,9 @@ export default function App() {
   const [isHost, setIsHost] = useState<boolean>(false);
   const [roomName, setRoomName] = useState<string>('Sinema Odası');
 
-  // Share Modal & Chat Toggle State
+  // Share Modal & Room Creation Modal States
+  const [isRoomModalOpen, setIsRoomModalOpen] = useState<boolean>(true);
+  const [roomModalMode, setRoomModalMode] = useState<'create' | 'join'>('create');
   const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -388,12 +390,17 @@ export default function App() {
     name: string,
     targetRoom: string,
     password: string,
-    asHost: boolean
+    asHost: boolean,
+    customName?: string
   ) => {
     setUserName(name);
     setRoomId(targetRoom);
     setRoomPassword(password);
     setIsHost(asHost);
+    if (customName) {
+      setRoomName(customName);
+    }
+    setIsRoomModalOpen(false);
 
     const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
     setUserColor(randomColor);
@@ -474,6 +481,8 @@ export default function App() {
     setRoomId('');
     setRoomPassword('');
     setIsShareModalOpen(false);
+    setIsRoomModalOpen(true);
+    setRoomModalMode('create');
     setUsers([]);
     setMessages([]);
     setRemoteStreams(new Map());
@@ -662,9 +671,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col font-sans">
-      {/* 1. Room Creation / Join Modal */}
-      {!isJoined && (
+      {/* 1. Room Creation / Join Modal (Can be closed anytime to explore site) */}
+      {isRoomModalOpen && (
         <RoomModal
+          isOpen={isRoomModalOpen}
+          onClose={() => setIsRoomModalOpen(false)}
+          initialMode={roomModalMode}
           initialRoomId={roomId}
           initialPassword={roomPassword}
           onJoinRoom={handleJoinRoom}
@@ -685,14 +697,23 @@ export default function App() {
         />
       )}
 
-      {/* 3. Top Bar Navigation with Chat Toggle */}
+      {/* 3. Top Bar Navigation with Explicit Room Action Buttons */}
       <Header
         roomId={roomId}
         roomName={roomName}
         hasPassword={Boolean(cryptoKey || roomPassword)}
         participantCount={users.length || 1}
+        isJoined={isJoined}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onOpenCreateRoom={() => {
+          setRoomModalMode('create');
+          setIsRoomModalOpen(true);
+        }}
+        onOpenJoinRoom={() => {
+          setRoomModalMode('join');
+          setIsRoomModalOpen(true);
+        }}
         onShareRoom={() => setIsShareModalOpen(true)}
         onLeaveRoom={handleLeaveRoom}
         isChatOpen={isChatOpen}
@@ -701,6 +722,50 @@ export default function App() {
 
       {/* 4. Main Body Content Area */}
       <main className="flex-1 p-2.5 sm:p-4 max-w-[1720px] w-full mx-auto flex flex-col gap-3 sm:gap-4">
+        {/* Solo Preview Mode Notification Banner */}
+        {!isJoined && (
+          <div className="bg-gradient-to-r from-rose-950/70 via-slate-900/90 to-indigo-950/70 border border-rose-500/30 rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-rose-600/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
+                <Film className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs sm:text-sm font-bold text-white">
+                    Tekli Önizleme Modundasınız
+                  </h3>
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+                    Solo İzleme
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Arkadaşlarınızla farklı cihazlardan aynı odaya bağlanıp canlı izlemek ve konuşmak için hemen oda oluşturun veya katılın.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                onClick={() => {
+                  setRoomModalMode('join');
+                  setIsRoomModalOpen(true);
+                }}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition-all active:scale-95"
+              >
+                <span>🔗 Odaya Katıl</span>
+              </button>
+              <button
+                onClick={() => {
+                  setRoomModalMode('create');
+                  setIsRoomModalOpen(true);
+                }}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg shadow-md shadow-rose-950/40 transition-all active:scale-95"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>✨ Oda Oluştur</span>
+              </button>
+            </div>
+          </div>
+        )}
         {/* TAB 1: Sinema Sahnesi & Birlikte İzleme */}
         {activeTab === 'cinema' && (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 relative">
