@@ -415,9 +415,12 @@ class WebRTCManager {
       const track = event.track;
       const transceivers = peer.getTransceivers();
       const idx = transceivers.indexOf(event.transceiver);
+      const pt = this.peerTransceivers.get(targetUserId);
+      const isScreenTransceiver = pt && (event.transceiver === pt.screenVid || event.transceiver === pt.screenAud);
 
       // Determine if track belongs to screen share (transceiver indices 2/3, or hints/labels)
       const isScreenShareTrack =
+        Boolean(isScreenTransceiver) ||
         idx === 2 ||
         idx === 3 ||
         track.contentHint === 'motion' ||
@@ -430,45 +433,59 @@ class WebRTCManager {
         let screenStream = this.remoteScreenStreams.get(targetUserId);
         if (!screenStream) {
           screenStream = new MediaStream();
-          this.remoteScreenStreams.set(targetUserId, screenStream);
         }
         // Remove existing track of same kind and add new one
         screenStream.getTracks().filter((t) => t.kind === track.kind).forEach((t) => screenStream!.removeTrack(t));
         screenStream.addTrack(track);
 
-        track.onended = () => {
-          screenStream?.removeTrack(track);
-          if (screenStream?.getTracks().length === 0) {
-            this.remoteScreenStreams.delete(targetUserId);
-          }
+        const newScreenStream = new MediaStream(screenStream.getTracks());
+        this.remoteScreenStreams.set(targetUserId, newScreenStream);
+
+        const notifyScreen = () => {
           if (this.onRemoteScreenStreamsChange) {
             this.onRemoteScreenStreamsChange(new Map(this.remoteScreenStreams));
           }
         };
 
-        if (this.onRemoteScreenStreamsChange) {
-          this.onRemoteScreenStreamsChange(new Map(this.remoteScreenStreams));
-        }
+        track.onunmute = () => notifyScreen();
+        track.onended = () => {
+          newScreenStream.removeTrack(track);
+          if (newScreenStream.getTracks().length === 0) {
+            this.remoteScreenStreams.delete(targetUserId);
+          }
+          notifyScreen();
+        };
+
+        notifyScreen();
       } else {
         // Camera & Microphone stream
         let cameraStream = this.remoteStreams.get(targetUserId);
         if (!cameraStream) {
           cameraStream = new MediaStream();
-          this.remoteStreams.set(targetUserId, cameraStream);
         }
         cameraStream.getTracks().filter((t) => t.kind === track.kind).forEach((t) => cameraStream!.removeTrack(t));
         cameraStream.addTrack(track);
 
-        track.onended = () => {
-          cameraStream?.removeTrack(track);
+        // Produce a fresh MediaStream instance so React components detect stream changes
+        const newCameraStream = new MediaStream(cameraStream.getTracks());
+        this.remoteStreams.set(targetUserId, newCameraStream);
+
+        const notifyCamera = () => {
           if (this.onRemoteStreamsChange) {
             this.onRemoteStreamsChange(new Map(this.remoteStreams));
           }
         };
 
-        if (this.onRemoteStreamsChange) {
-          this.onRemoteStreamsChange(new Map(this.remoteStreams));
-        }
+        track.onunmute = () => notifyCamera();
+        track.onended = () => {
+          newCameraStream.removeTrack(track);
+          if (newCameraStream.getTracks().length === 0) {
+            this.remoteStreams.delete(targetUserId);
+          }
+          notifyCamera();
+        };
+
+        notifyCamera();
       }
     };
 
@@ -485,8 +502,8 @@ class WebRTCManager {
     };
 
     peer.onconnectionstatechange = () => {
+      // Do not remove on transient 'disconnected', only on definitive 'failed' or 'closed'
       if (
-        peer.connectionState === 'disconnected' ||
         peer.connectionState === 'failed' ||
         peer.connectionState === 'closed'
       ) {
@@ -536,6 +553,14 @@ class WebRTCManager {
     }
 
     try {
+      if (peer.signalingState !== 'stable') {
+        try {
+          await peer.setLocalDescription({ type: 'rollback' });
+        } catch (e) {
+          this.removePeer(senderId);
+          peer = await this.createPeer(senderId, false);
+        }
+      }
       await peer.setRemoteDescription(new RTCSessionDescription(offer));
       await this.drainCandidates(senderId, peer);
       const answer = await peer.createAnswer();

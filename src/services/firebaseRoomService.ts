@@ -6,6 +6,7 @@ import {
   collection,
   setDoc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   orderBy,
@@ -131,6 +132,16 @@ class FirebaseRoomService {
     this.currentRoomId = normRoomId;
     this.currentUserId = user.id;
     this.sessionStartTime = Date.now();
+
+    // Clean up any stale signals addressed to this user from past sessions
+    try {
+      const oldSignalsSnap = await getDocs(
+        query(collection(db, 'rooms', normRoomId, 'signals'), where('targetId', '==', user.id))
+      );
+      oldSignalsSnap.forEach((docSnap) => {
+        deleteDoc(docSnap.ref).catch(() => {});
+      });
+    } catch (e) {}
 
     const roomRef = doc(db, 'rooms', normRoomId);
 
@@ -460,7 +471,8 @@ class FirebaseRoomService {
   ): Unsubscribe {
     const normRoomId = roomId.trim().toLowerCase();
     const signalsCol = collection(db, 'rooms', normRoomId, 'signals');
-    const q = query(signalsCol, where('targetId', '==', myUserId), limit(30));
+    // Query all incoming signals targeted to myUserId without an artificial limit
+    const q = query(signalsCol, where('targetId', '==', myUserId));
 
     const unsub = onSnapshot(
       q,
@@ -468,25 +480,31 @@ class FirebaseRoomService {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
             const d = change.doc.data();
+
+            // Delete ephemeral signal from Firestore immediately to prevent clutter
+            deleteDoc(change.doc.ref).catch(() => {});
+
+            // Filter out signals that originated before this session started
+            if (d.timestamp && d.timestamp < this.sessionStartTime - 10000) {
+              return;
+            }
+
             if (d.id && !this.seenSignalIds.has(d.id)) {
               this.seenSignalIds.add(d.id);
-              if (this.seenSignalIds.size > 200) {
+              if (this.seenSignalIds.size > 500) {
                 const first = this.seenSignalIds.values().next().value;
                 if (first) this.seenSignalIds.delete(first);
               }
 
-              // Only process signals created after this session began
-              if (d.timestamp && d.timestamp >= this.sessionStartTime - 5000) {
-                let parsed = d.data;
-                if (typeof d.data === 'string') {
-                  try {
-                    parsed = JSON.parse(d.data);
-                  } catch (e) {
-                    parsed = d.data;
-                  }
+              let parsed = d.data;
+              if (typeof d.data === 'string') {
+                try {
+                  parsed = JSON.parse(d.data);
+                } catch (e) {
+                  parsed = d.data;
                 }
-                callback({ senderId: d.senderId, type: d.type, data: parsed });
               }
+              callback({ senderId: d.senderId, type: d.type, data: parsed });
             }
           }
         });

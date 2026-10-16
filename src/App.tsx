@@ -204,7 +204,7 @@ export default function App() {
 
       const activeIds = new Set(list.map((u) => u.id));
       // Cleanup remote streams for participants who left
-      remoteStreams.forEach((_, peerId) => {
+      webrtc.getRemoteStreams().forEach((_, peerId) => {
         if (!activeIds.has(peerId)) {
           webrtc.removePeer(peerId);
         }
@@ -298,12 +298,16 @@ export default function App() {
     webrtc.init(cleanRoom, userId);
     webrtc.setPushToTalkMode(isPushToTalkMode);
 
+    let camActive = false;
+    let micActive = false;
     try {
       const stream = await webrtc.startLocalMedia(true, true);
       if (stream) {
         setLocalStream(stream);
-        setHasCamera(stream.getVideoTracks().length > 0);
-        setHasMic(stream.getAudioTracks().length > 0);
+        camActive = stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
+        micActive = stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].enabled;
+        setHasCamera(camActive);
+        setHasMic(micActive);
       }
     } catch (e) {
       console.warn('Local media acquire skipped:', e);
@@ -319,8 +323,8 @@ export default function App() {
         name,
         avatarColor: randomColor,
         isHost: asHost,
-        hasCamera: hasCamera,
-        hasMic: hasMic,
+        hasCamera: camActive,
+        hasMic: micActive,
       },
       password
     );

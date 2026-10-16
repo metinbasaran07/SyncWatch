@@ -41,6 +41,7 @@ const RemoteUserTile: React.FC<{
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [, setTrackRevision] = useState<number>(0);
 
   const tryPlayAudio = () => {
     if (audioRef.current) {
@@ -49,23 +50,6 @@ const RemoteUserTile: React.FC<{
         .catch(() => setAudioBlocked(true));
     }
   };
-
-  useEffect(() => {
-    if (stream) {
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      if (audioRef.current) {
-        audioRef.current.srcObject = stream;
-        audioRef.current.play()
-          .then(() => setAudioBlocked(false))
-          .catch((e) => {
-            console.warn('Remote audio autoplay blocked by mobile browser policy:', e);
-            setAudioBlocked(true);
-          });
-      }
-    }
-  }, [stream]);
 
   // A remote user tile should ONLY display camera video, never the Netflix / tab screen share
   const isScreenTrack = (s?: MediaStream) => {
@@ -85,9 +69,64 @@ const RemoteUserTile: React.FC<{
     stream &&
     stream.getVideoTracks().length > 0 &&
     stream.getVideoTracks()[0].enabled &&
-    !isScreenTrack(stream) &&
-    (!user.isSharingScreen || user.hasCamera)
+    !isScreenTrack(stream)
   );
+
+  // Re-render when tracks are added/removed/unmuted on the remote stream
+  useEffect(() => {
+    if (!stream) return;
+
+    const handleTrackChange = () => {
+      setTrackRevision((r) => r + 1);
+    };
+
+    stream.addEventListener('addtrack', handleTrackChange);
+    stream.addEventListener('removetrack', handleTrackChange);
+
+    const tracks = stream.getTracks();
+    tracks.forEach((t) => {
+      t.addEventListener('mute', handleTrackChange);
+      t.addEventListener('unmute', handleTrackChange);
+      t.addEventListener('ended', handleTrackChange);
+    });
+
+    return () => {
+      stream.removeEventListener('addtrack', handleTrackChange);
+      stream.removeEventListener('removetrack', handleTrackChange);
+      tracks.forEach((t) => {
+        t.removeEventListener('mute', handleTrackChange);
+        t.removeEventListener('unmute', handleTrackChange);
+        t.removeEventListener('ended', handleTrackChange);
+      });
+    };
+  }, [stream]);
+
+  // Audio player attachment
+  useEffect(() => {
+    if (stream && audioRef.current) {
+      if (audioRef.current.srcObject !== stream) {
+        audioRef.current.srcObject = stream;
+      }
+      audioRef.current.play()
+        .then(() => setAudioBlocked(false))
+        .catch((e) => {
+          console.warn('Remote audio autoplay blocked by mobile browser policy:', e);
+          setAudioBlocked(true);
+        });
+    }
+  }, [stream]);
+
+  // Video element sync when stream or hasVideo updates
+  useEffect(() => {
+    if (videoRef.current && stream && hasVideo) {
+      if (videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+      }
+      videoRef.current.play().catch((err) => {
+        console.warn('Remote video play error:', err);
+      });
+    }
+  }, [stream, hasVideo]);
 
   return (
     <div
@@ -115,9 +154,18 @@ const RemoteUserTile: React.FC<{
 
       {hasVideo ? (
         <video
-          ref={videoRef}
+          ref={(el) => {
+            (videoRef as any).current = el;
+            if (el && stream) {
+              if (el.srcObject !== stream) {
+                el.srcObject = stream;
+              }
+              el.play().catch(() => {});
+            }
+          }}
           autoPlay
           playsInline
+          muted
           className="w-full h-full object-cover"
         />
       ) : (
@@ -331,7 +379,14 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
           >
             {hasCamera && localStream && localStream.getVideoTracks().length > 0 ? (
               <video
-                ref={localVideoRef}
+                ref={(el) => {
+                  (localVideoRef as any).current = el;
+                  if (el && localStream) {
+                    if (el.srcObject !== localStream) {
+                      el.srcObject = localStream;
+                    }
+                  }
+                }}
                 autoPlay
                 playsInline
                 muted

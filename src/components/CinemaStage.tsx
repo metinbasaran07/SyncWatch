@@ -624,11 +624,25 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             .map((user) => {
               const remoteStream = remoteStreams.get(user.id);
               // Ensure screen shares are never rendered inside this small camera tile
+              const isScreen = (s?: MediaStream) => {
+                if (!s) return false;
+                const v = s.getVideoTracks()[0];
+                return Boolean(
+                  v && (
+                    v.contentHint === 'motion' ||
+                    v.label.toLowerCase().includes('screen') ||
+                    v.label.toLowerCase().includes('display') ||
+                    v.label.toLowerCase().includes('tab') ||
+                    (s.id && s.id.toLowerCase().includes('screen'))
+                  )
+                );
+              };
+
               const hasRemoteVideo = Boolean(
                 remoteStream &&
                 remoteStream.getVideoTracks().length > 0 &&
                 remoteStream.getVideoTracks()[0].enabled &&
-                !user.isSharingScreen
+                !isScreen(remoteStream)
               );
 
               return (
@@ -640,12 +654,15 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                     <video
                       ref={(el) => {
                         if (el && remoteStream) {
-                          el.srcObject = remoteStream;
+                          if (el.srcObject !== remoteStream) {
+                            el.srcObject = remoteStream;
+                          }
                           el.play().catch(() => {});
                         }
                       }}
                       autoPlay
                       playsInline
+                      muted
                       className="w-full h-full object-cover"
                     />
                   ) : (
