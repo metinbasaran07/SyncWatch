@@ -706,6 +706,7 @@ export default function App() {
                 currentUserId={userId}
                 localStream={localStream}
                 remoteStreams={remoteStreams}
+                remoteScreenStreams={remoteScreenStreams}
                 isPushToTalkMode={isPushToTalkMode}
                 onTogglePushToTalkMode={handleTogglePushToTalkMode}
                 isPushToTalkActive={isPushToTalkActive}

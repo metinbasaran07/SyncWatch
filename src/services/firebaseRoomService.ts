@@ -133,16 +133,6 @@ class FirebaseRoomService {
     this.currentUserId = user.id;
     this.sessionStartTime = Date.now();
 
-    // Clean up any stale signals addressed to this user from past sessions
-    try {
-      const oldSignalsSnap = await getDocs(
-        query(collection(db, 'rooms', normRoomId, 'signals'), where('targetId', '==', user.id))
-      );
-      oldSignalsSnap.forEach((docSnap) => {
-        deleteDoc(docSnap.ref).catch(() => {});
-      });
-    } catch (e) {}
-
     const roomRef = doc(db, 'rooms', normRoomId);
 
     try {
@@ -481,15 +471,7 @@ class FirebaseRoomService {
           if (change.type === 'added') {
             const d = change.doc.data();
 
-            // Delete ephemeral signal from Firestore immediately to prevent clutter
-            deleteDoc(change.doc.ref).catch(() => {});
-
-            // Filter out signals that originated before this session started
-            if (d.timestamp && d.timestamp < this.sessionStartTime - 10000) {
-              return;
-            }
-
-            if (d.id && !this.seenSignalIds.has(d.id)) {
+            if (d && d.id && !this.seenSignalIds.has(d.id)) {
               this.seenSignalIds.add(d.id);
               if (this.seenSignalIds.size > 500) {
                 const first = this.seenSignalIds.values().next().value;
@@ -505,6 +487,9 @@ class FirebaseRoomService {
                 }
               }
               callback({ senderId: d.senderId, type: d.type, data: parsed });
+
+              // Delete the ephemeral signal doc after delivering
+              deleteDoc(change.doc.ref).catch(() => {});
             }
           }
         });

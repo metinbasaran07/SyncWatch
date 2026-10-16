@@ -17,6 +17,7 @@ interface CameraGridProps {
   currentUserId: string;
   localStream: MediaStream | null;
   remoteStreams?: Map<string, MediaStream>;
+  remoteScreenStreams?: Map<string, MediaStream>;
   isPushToTalkMode: boolean;
   onTogglePushToTalkMode: (enabled: boolean) => void;
   isPushToTalkActive: boolean;
@@ -51,25 +52,10 @@ const RemoteUserTile: React.FC<{
     }
   };
 
-  // A remote user tile should ONLY display camera video, never the Netflix / tab screen share
-  const isScreenTrack = (s?: MediaStream) => {
-    if (!s) return false;
-    const vTrack = s.getVideoTracks()[0];
-    if (!vTrack) return false;
-    return (
-      vTrack.contentHint === 'motion' ||
-      vTrack.label.toLowerCase().includes('screen') ||
-      vTrack.label.toLowerCase().includes('display') ||
-      vTrack.label.toLowerCase().includes('tab') ||
-      (s.id && s.id.toLowerCase().includes('screen'))
-    );
-  };
-
   const hasVideo = Boolean(
     stream &&
     stream.getVideoTracks().length > 0 &&
-    stream.getVideoTracks()[0].enabled &&
-    !isScreenTrack(stream)
+    stream.getVideoTracks()[0].enabled
   );
 
   // Re-render when tracks are added/removed/unmuted on the remote stream
@@ -215,6 +201,7 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
   currentUserId,
   localStream,
   remoteStreams = new Map(),
+  remoteScreenStreams = new Map(),
   isPushToTalkMode,
   onTogglePushToTalkMode,
   isPushToTalkActive,
@@ -428,15 +415,20 @@ export const CameraGrid: React.FC<CameraGridProps> = ({
           {/* 2. Remote Room Participants Camera Cards */}
           {users
             .filter((u) => u.id !== currentUserId)
-            .map((user) => (
-              <RemoteUserTile
-                key={user.id}
-                user={user}
-                stream={remoteStreams.get(user.id)}
-                cardWidth={cardWidth}
-                cardHeight={cardHeight}
-              />
-            ))}
+            .map((user) => {
+              const stream =
+                remoteStreams.get(user.id) ||
+                (!user.isSharingScreen && remoteScreenStreams ? remoteScreenStreams.get(user.id) : undefined);
+              return (
+                <RemoteUserTile
+                  key={user.id}
+                  user={user}
+                  stream={stream}
+                  cardWidth={cardWidth}
+                  cardHeight={cardHeight}
+                />
+              );
+            })}
         </div>
       )}
 

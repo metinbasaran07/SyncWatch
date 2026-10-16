@@ -413,21 +413,15 @@ class WebRTCManager {
 
     peer.ontrack = (event) => {
       const track = event.track;
-      const transceivers = peer.getTransceivers();
-      const idx = transceivers.indexOf(event.transceiver);
-      const pt = this.peerTransceivers.get(targetUserId);
-      const isScreenTransceiver = pt && (event.transceiver === pt.screenVid || event.transceiver === pt.screenAud);
 
-      // Determine if track belongs to screen share (transceiver indices 2/3, or hints/labels)
-      const isScreenShareTrack =
-        Boolean(isScreenTransceiver) ||
-        idx === 2 ||
-        idx === 3 ||
-        track.contentHint === 'motion' ||
-        (event.streams[0]?.id && event.streams[0].id.toLowerCase().includes('screen')) ||
-        track.label.toLowerCase().includes('screen') ||
-        track.label.toLowerCase().includes('display') ||
-        track.label.toLowerCase().includes('tab');
+      // A track is screen share ONLY if:
+      // - It has motion contentHint (explicitly set on getDisplayMedia video tracks)
+      // - OR its label explicitly indicates screen/window capture and is NOT a webcam/camera
+      const isMotionScreen = track.contentHint === 'motion';
+      const isScreenLabel =
+        (track.label.toLowerCase().includes('screen') || track.label.toLowerCase().includes('window')) &&
+        !track.label.toLowerCase().includes('camera');
+      const isScreenShareTrack = isMotionScreen || isScreenLabel;
 
       if (isScreenShareTrack) {
         let screenStream = this.remoteScreenStreams.get(targetUserId);
@@ -590,6 +584,7 @@ class WebRTCManager {
   }
 
   public async handleCandidate(senderId: string, candidate: RTCIceCandidateInit) {
+    if (!candidate || !candidate.candidate) return;
     const peer = this.peers.get(senderId);
     if (peer && peer.remoteDescription && peer.remoteDescription.type) {
       try {
